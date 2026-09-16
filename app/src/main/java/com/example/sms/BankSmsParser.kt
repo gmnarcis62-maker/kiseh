@@ -199,11 +199,7 @@ class BankSmsParser {
         if (signMatcher.find()) {
             val sign = signMatcher.group(1)
             val rawNumberStr = signMatcher.group(2)?.trim() ?: ""
-            val rawValue = rawNumberStr.toLongOrNull() ?: run { 
-                // تلاش مجدد بدون حذف کاما
-                val rawGroup2 = signMatcher.group(2)
-                rawGroup2?.replace(",", "")?.trim()?.toLongOrNull() ?: return@run null
-            }
+            val rawValue: Long = rawNumberStr.toLongOrNull() ?: 0L
             
             if (rawValue > 0L) {
                 val unit = if (signMatcher.groupCount() >= 3) signMatcher.group(3) ?: "" else ""
