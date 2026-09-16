@@ -141,6 +141,9 @@ class BankSmsParser {
 
     /**
      * پیام‌هایی که صرفاً اعلام موجودی هستند و هیچ تراکنش مالی (برداشت، واریز، خرید یا انتقال) ندارند
+     *
+     * نکته اصلاح‌شده: اگر پیامک شامل مبلغی با علامت صریح + یا - باشد،
+     * آن را تراکنش در نظر می‌گیریم نه صرفاً اعلام موجودی.
      */
     private fun isPureBalanceInquiry(text: String): Boolean {
         val lower = text.lowercase()
@@ -148,7 +151,9 @@ class BankSmsParser {
         val hasTransaction = BankPatternRegistry.INCOME_KEYWORDS.any { lower.contains(it) } ||
                 BankPatternRegistry.EXPENSE_KEYWORDS.any { lower.contains(it) } ||
                 lower.contains("خرید") || lower.contains("برداشت") || lower.contains("واریز") ||
-                lower.contains("انتقال") || lower.contains("قبض") || lower.contains("سود") || lower.contains("حقوق")
+                lower.contains("انتقال") || lower.contains("قبض") || lower.contains("سود") || lower.contains("حقوق") ||
+                // اگر پیامک شامل یک مبلغ با علامت صریح + یا - باشد، تراکنش است
+                Regex("""[+\-]\s*[0-9][0-9,]*""").containsMatchIn(text)
         return hasBalance && !hasTransaction
     }
 
@@ -188,34 +193,30 @@ class BankSmsParser {
     }
 
     /**
-     * استخراج مبلغ و تبدیل آن به «تومان» برای تمامی بانک‌ها و نئوبانک‌های کشور
+     * استخراج مبلغ و تبدیل آن به «تومان» برای تمامی بانک‌ها و نئوبانک‌های کشور.
+     *
+     * نکته اصلاح‌شده: الگوی مبلغ با علامت (+/-) روی متن اصلی اعمال می‌شود، نه متن نرمال‌شده،
+     * تا اعداد بعدی (مثل تاریخ 06/24) به انتهای مبلغ نچسبند.
      */
     private fun extractAmountInToman(text: String, bank: BankType): Pair<Long, Boolean> {
-        val normalizedText = text.replace(",", "").replace(" ", "")
-        
-        // ۱. الگوی نئوبانکی با علامت مثبت یا منفی (اولویت بالا برای فرمت‌هایی مثل "-2,060,000" یا "-2060000")
-        val signPattern = Pattern.compile("""([+\-])\s*([0-9]{3,})""")
-        val signMatcher = signPattern.matcher(normalizedText)
+        // ۱. الگوی نئوبانکی با علامت مثبت یا منفی (اولویت بالا)
+        //    مثال‌های منطبق: "-2,060,000"، "-2060000"، "+ 1,500,000"
+        //    از متن اصلی استفاده می‌کنیم تا مرز مبلغ با کاراکترهای غیرعددی مشخص شود.
+        val signPattern = Pattern.compile("""([+\-])\s*([0-9][0-9,]*[0-9]|[0-9])""")
+        val signMatcher = signPattern.matcher(text)
         if (signMatcher.find()) {
             val sign = signMatcher.group(1)
-            val rawNumberStr = signMatcher.group(2)?.trim() ?: ""
+            val rawNumberStr = signMatcher.group(2)?.replace(",", "")?.trim() ?: ""
             val rawValue: Long = rawNumberStr.toLongOrNull() ?: 0L
-            
+
             if (rawValue > 0L) {
-                val unit = if (signMatcher.groupCount() >= 3) signMatcher.group(3) ?: "" else ""
-                val isRial = when {
-                    unit.contains("ریال") -> true
-                    unit.contains("تومان") || unit.contains("تومن") -> false
-                    bank.defaultIsRial -> rawValue >= 1000L
-                    else -> rawValue >= 1000000L
-                }
-                
+                val isRial = if (bank.defaultIsRial) rawValue >= 1000L else rawValue >= 1000000L
                 val amountInToman = if (isRial) rawValue / 10L else rawValue
                 val isIncome = sign == "+"
                 return Pair(amountInToman, isRial)
             }
         }
-        
+
         val patterns = listOf(
             // ۲. الگوی استاندارد بانکی با کلمات کلیدی مشخص
             Pattern.compile("""(?:مبلغ|واریز|برداشت|خرید|انتقال|کسر|بدهکار|بستانکار|حقوق|سود|قبض|پرداخت)[\s:]*[+\-]?\s*([0-9,]+)\s*(ریال|تومان|تومن)?"""),
@@ -237,15 +238,8 @@ class BankSmsParser {
                 val isRial = when {
                     unit.contains("ریال") -> true
                     unit.contains("تومان") || unit.contains("تومن") -> false
-                    // اگر واحد قید نشده باشد، بر اساس تنظیمات بانک عمل می‌شود
-                    bank.defaultIsRial -> {
-                        // در بانک‌های ریالی، مبالغ بزرگتر از ۱۰۰۰ ریال تلقی می‌شوند
-                        rawValue >= 1000L
-                    }
-                    else -> {
-                        // در نئوبانک‌ها (مانند بلوبانک، ویپاد و ...) مبالغ بدون واحد، تومان هستند
-                        rawValue >= 1000000L
-                    }
+                    bank.defaultIsRial -> rawValue >= 1000L
+                    else -> rawValue >= 1000000L
                 }
 
                 val amountInToman = if (isRial) rawValue / 10L else rawValue
@@ -280,10 +274,8 @@ class BankSmsParser {
      * استخراج ۴ رقم انتهای کارت یا حساب
      */
     private fun extractCardNumber(text: String): String? {
-        // حذف خط تیره‌ها برای یکنواخت‌سازی فرمت کارت‌ها
         val textWithoutDashes = text.replace("-", "")
 
-        // اولویت ۱: اگر کارت مبدا مشخص باشد (از کارت / از حساب)
         val fromPattern = Pattern.compile("""(?:از\s*(?:کارت|حساب|سپرده)?[\s:]*)(?:.*?[xX\*\.]{1,}([0-9]{4})\b|([0-9]{4,16})\b)""")
         val fromMatcher = fromPattern.matcher(textWithoutDashes)
         if (fromMatcher.find()) {
@@ -293,14 +285,12 @@ class BankSmsParser {
             if (fullDigits != null) return if (fullDigits.length >= 4) fullDigits.takeLast(4) else fullDigits
         }
 
-        // اولویت ۲: کارت‌های ماسک‌شده با ستاره، نقطه یا x
         val maskedPattern = Pattern.compile("""[\*xX\.]{1,}([0-9]{4})\b""")
         val maskedMatcher = maskedPattern.matcher(textWithoutDashes)
         if (maskedMatcher.find()) {
             return maskedMatcher.group(1)
         }
 
-        // اولویت ۳: شماره کارت یا حساب پس از کلمات کلیدی کارت/حساب/سپرده
         val cardPattern = Pattern.compile("""(?:\*{2,}|کارت|حساب|سپرده|از|به)[\s:]*([0-9]{4,16})\b""")
         val matcher = cardPattern.matcher(textWithoutDashes)
         if (matcher.find()) {
