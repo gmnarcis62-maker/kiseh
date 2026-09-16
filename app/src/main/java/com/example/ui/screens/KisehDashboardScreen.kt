@@ -234,7 +234,15 @@ fun KisehDashboardScreen(viewModel: MainViewModel) {
 
     LaunchedEffect(isProUser) {
         if (!isProUser && onboardingPrefs.hasSeenFirstLaunch()) {
-            showFreePlanReminderSheet = true
+            // بررسی می‌کنیم که آیا کاربر در ماه جاری قبلاً یادآوری را دیده است یا خیر
+            val hasSeenThisMonth = onboardingPrefs.hasSeenFreePlanReminderThisMonth()
+            if (!hasSeenThisMonth) {
+                showFreePlanReminderSheet = true
+                // ثبت نمایش یادآوری برای ماه جاری
+                onboardingPrefs.markFreePlanReminderShown()
+            } else {
+                showFreePlanReminderSheet = false
+            }
         } else {
             showFreePlanReminderSheet = false
         }

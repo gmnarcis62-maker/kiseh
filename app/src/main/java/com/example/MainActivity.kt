@@ -1,6 +1,7 @@
 package com.example
 
 import android.Manifest
+import android.content.Intent
 import android.content.pm.PackageManager
 import android.os.Build
 import android.os.Bundle
@@ -20,7 +21,9 @@ import androidx.compose.runtime.setValue
 import androidx.compose.ui.Modifier
 import androidx.core.content.ContextCompat
 import androidx.fragment.app.FragmentActivity
+import com.example.billing.BillingManager
 import com.example.notification.QuickVoiceNotificationHelper
+import com.example.sms.SmsBackgroundService
 import com.example.ui.screens.KisehDashboardScreen
 import com.example.ui.screens.PinLockScreen
 import com.example.ui.screens.SplashScreen
@@ -56,7 +59,7 @@ class MainActivity : FragmentActivity() {
         enableEdgeToEdge()
 
         try {
-            com.example.billing.BillingManager.init(this)
+            BillingManager.init(this)
         } catch (_: Throwable) {}
 
         try {
@@ -66,6 +69,9 @@ class MainActivity : FragmentActivity() {
         try {
             QuickVoiceNotificationHelper.showQuickVoiceNotification(this)
         } catch (_: Throwable) {}
+
+        // شروع سرویس پس‌زمینه برای زنده نگه داشتن برنامه جهت دریافت پیامک و ویجت
+        startBackgroundService()
 
         setContent {
             KisehTheme {
@@ -191,7 +197,17 @@ class MainActivity : FragmentActivity() {
 
     override fun onDestroy() {
         super.onDestroy()
-        com.example.billing.BillingManager.release()
+        BillingManager.release()
+    }
+
+    private fun startBackgroundService() {
+        // برای اندروید ۸ به بالا باید از startForegroundService استفاده کرد
+        val intent = Intent(this, SmsBackgroundService::class.java)
+        if (Build.VERSION.SDK_INT >= Build.VERSION_CODES.O) {
+            startForegroundService(intent)
+        } else {
+            startService(intent)
+        }
     }
 
     private fun requestRequiredPermissions() {
