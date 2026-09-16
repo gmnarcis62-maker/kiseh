@@ -202,7 +202,7 @@ class BankSmsParser {
             val rawValue = rawNumberStr.toLongOrNull() ?: run { 
                 // تلاش مجدد بدون حذف کاما
                 val rawGroup2 = signMatcher.group(2)
-                rawGroup2?.replace(",", "")?.trim()?.toLongOrNull() ?: return@let null
+                rawGroup2?.replace(",", "")?.trim()?.toLongOrNull() ?: return@run null
             }
             
             if (rawValue > 0L) {
