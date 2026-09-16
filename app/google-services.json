@@ -1,0 +1,29 @@
+{
+  "project_info": {
+    "project_number": "958789721454",
+    "project_id": "kiseh-7d1f0",
+    "storage_bucket": "kiseh-7d1f0.firebasestorage.app"
+  },
+  "client": [
+    {
+      "client_info": {
+        "mobilesdk_app_id": "1:958789721454:android:2e89242c9dc48a0207357f",
+        "android_client_info": {
+          "package_name": "red.line.kiseh"
+        }
+      },
+      "oauth_client": [],
+      "api_key": [
+        {
+          "current_key": "AIzaSyDrtZ45YsqjyAihqK4wFrXcLWSF1rlCmJk"
+        }
+      ],
+      "services": {
+        "appinvite_service": {
+          "other_platform_oauth_client": []
+        }
+      }
+    }
+  ],
+  "configuration_version": "1"
+}

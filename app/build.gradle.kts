@@ -23,14 +23,6 @@ android {
     testInstrumentationRunner = "androidx.test.runner.AndroidJUnitRunner"
   }
 
-  signingConfigs {
-    create("release") {
-      storeFile = file("${rootDir}/kiseh_release.jks")
-      storePassword = System.getenv("STORE_PASSWORD") ?: "2614583423cG10%"
-      keyAlias = System.getenv("KEY_ALIAS") ?: "kiseh"
-      keyPassword = System.getenv("KEY_PASSWORD") ?: "2614583423cG10%"
-      storeType = "JKS"
-    }
     create("debugConfig") {
       storeFile = file("${rootDir}/debug.keystore")
       storePassword = "android"
@@ -39,15 +31,6 @@ android {
     }
   }
 
-  buildTypes {
-    release {
-      isCrunchPngs = false
-      isMinifyEnabled = false
-      proguardFiles(getDefaultProguardFile("proguard-android-optimize.txt"), "proguard-rules.pro")
-      signingConfig = signingConfigs.getByName("release")
-    }
-    debug { signingConfig = signingConfigs.getByName("debugConfig") }
-  }
   compileOptions {
     sourceCompatibility = JavaVersion.VERSION_11
     targetCompatibility = JavaVersion.VERSION_11
