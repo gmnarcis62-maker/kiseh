@@ -78,7 +78,7 @@
 
         <receiver
             android:name=".sms.SmsActionReceiver"
-            android:exported="false" />
+            android:exported="true" />
 
         <receiver
             android:name=".sms.BootReceiver"
