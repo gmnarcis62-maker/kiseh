@@ -1,6 +1,7 @@
 package com.example
 
 import android.Manifest
+import android.content.Context
 import android.content.Intent
 import android.content.pm.PackageManager
 import android.os.Build
@@ -72,6 +73,9 @@ class MainActivity : FragmentActivity() {
 
         // شروع سرویس پس‌زمینه برای زنده نگه داشتن برنامه جهت دریافت پیامک و ویجت
         startBackgroundService()
+
+        // درخواست معافیت از بهینه‌سازی باتری برای پایدار ماندن سرویس
+        requestIgnoreBatteryOptimization()
 
         setContent {
             KisehTheme {
@@ -210,6 +214,28 @@ class MainActivity : FragmentActivity() {
         }
     }
 
+    /**
+     * درخواست معافیت از بهینه‌سازی باتری برای پایدار ماندن سرویس پس‌زمینه.
+     * این کار باعث می‌شود اندروید سرویس ما را در پس‌زمینه به قتل نرساند.
+     */
+    private fun requestIgnoreBatteryOptimization() {
+        if (Build.VERSION.SDK_INT >= Build.VERSION_CODES.M) {
+            try {
+                val pm = getSystemService(Context.POWER_SERVICE) as android.os.PowerManager
+                if (!pm.isIgnoringBatteryOptimizations(packageName)) {
+                    val intent = Intent(android.provider.Settings.ACTION_REQUEST_IGNORE_BATTERY_OPTIMIZATIONS).apply {
+                        data = android.net.Uri.parse("package:$packageName")
+                    }
+                    startActivity(intent)
+                }
+            } catch (_: Throwable) {
+                try {
+                    startActivity(Intent(android.provider.Settings.ACTION_IGNORE_BATTERY_OPTIMIZATION_SETTINGS))
+                } catch (_: Throwable) {}
+            }
+        }
+    }
+
     private fun requestRequiredPermissions() {
         val permissionsToRequest = requiredPermissions.filter {
             ContextCompat.checkSelfPermission(this, it) != PackageManager.PERMISSION_GRANTED
@@ -231,4 +257,3 @@ class MainActivity : FragmentActivity() {
         }
     }
 }
-
