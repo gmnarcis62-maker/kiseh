@@ -1,0 +1,6 @@
+{
+  "name": "کیسه",
+  "description": "مدیریت هوشمند هزینه با ثبت صوتی و تحلیل متن فارسی",
+  "requestFramePermissions": [],
+  "majorCapabilities": ["MAJOR_CAPABILITY_SERVER_SIDE_GEMINI_API"]
+}

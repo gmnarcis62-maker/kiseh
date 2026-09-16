@@ -1,0 +1,73 @@
+<?xml version="1.0" encoding="utf-8"?>
+<LinearLayout xmlns:android="http://schemas.android.com/apk/res/android"
+    android:id="@+id/notification_root"
+    android:layout_width="match_parent"
+    android:layout_height="wrap_content"
+    android:orientation="horizontal"
+    android:layoutDirection="rtl"
+    android:gravity="center_vertical"
+    android:paddingStart="16dp"
+    android:paddingEnd="16dp"
+    android:paddingTop="12dp"
+    android:paddingBottom="12dp"
+    android:background="@android:color/white">
+
+    <!-- آیکون سمت راست در چیدمان RTL -->
+    <ImageView
+        android:id="@+id/iv_mic_icon"
+        android:layout_width="40dp"
+        android:layout_height="40dp"
+        android:layout_marginEnd="12dp"
+        android:src="@drawable/ic_mic_notification"
+        android:contentDescription="دستیار ثبت صوتی کیسه" />
+
+    <!-- بخش متنی میانی راست‌چین -->
+    <LinearLayout
+        android:id="@+id/layout_text_container"
+        android:layout_width="0dp"
+        android:layout_height="wrap_content"
+        android:layout_weight="1"
+        android:orientation="vertical"
+        android:layoutDirection="rtl"
+        android:gravity="start|center_vertical">
+
+        <TextView
+            android:id="@+id/tv_notification_title"
+            android:layout_width="wrap_content"
+            android:layout_height="wrap_content"
+            android:text="کیسه - دستیار ثبت سریع صوتی 🎙️"
+            android:textSize="13sp"
+            android:textStyle="bold"
+            android:textColor="#064E3B"
+            android:gravity="start"
+            android:textAlignment="viewStart" />
+
+        <TextView
+            android:id="@+id/tv_notification_subtitle"
+            android:layout_width="wrap_content"
+            android:layout_height="wrap_content"
+            android:layout_marginTop="2dp"
+            android:text="برای ثبت سریع خرج یا درآمد، ضربه بزنید"
+            android:textSize="11sp"
+            android:textColor="#374151"
+            android:gravity="start"
+            android:textAlignment="viewStart" />
+    </LinearLayout>
+
+    <!-- دکمه اقدام در سمت چپ چیدمان RTL -->
+    <TextView
+        android:id="@+id/btn_record_action"
+        android:layout_width="wrap_content"
+        android:layout_height="wrap_content"
+        android:layout_marginStart="8dp"
+        android:paddingStart="10dp"
+        android:paddingEnd="10dp"
+        android:paddingTop="6dp"
+        android:paddingBottom="6dp"
+        android:text="🎙️ ثبت صوتی"
+        android:textSize="12sp"
+        android:textStyle="bold"
+        android:textColor="#059669"
+        android:gravity="center" />
+
+</LinearLayout>
