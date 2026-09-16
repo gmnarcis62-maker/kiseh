@@ -191,9 +191,36 @@ class BankSmsParser {
      * استخراج مبلغ و تبدیل آن به «تومان» برای تمامی بانک‌ها و نئوبانک‌های کشور
      */
     private fun extractAmountInToman(text: String, bank: BankType): Pair<Long, Boolean> {
+        val normalizedText = text.replace(",", "").replace(" ", "")
+        
+        // ۱. الگوی نئوبانکی با علامت مثبت یا منفی (اولویت بالا برای فرمت‌هایی مثل "-2,060,000" یا "-2060000")
+        val signPattern = Pattern.compile("""([+\-])\s*([0-9]{3,})""")
+        val signMatcher = signPattern.matcher(normalizedText)
+        if (signMatcher.find()) {
+            val sign = signMatcher.group(1)
+            val rawNumberStr = signMatcher.group(2)?.trim() ?: ""
+            val rawValue = rawNumberStr.toLongOrNull() ?: run { 
+                // تلاش مجدد بدون حذف کاما
+                val rawGroup2 = signMatcher.group(2)
+                rawGroup2?.replace(",", "")?.trim()?.toLongOrNull() ?: return@let null
+            }
+            
+            if (rawValue > 0L) {
+                val unit = if (signMatcher.groupCount() >= 3) signMatcher.group(3) ?: "" else ""
+                val isRial = when {
+                    unit.contains("ریال") -> true
+                    unit.contains("تومان") || unit.contains("تومن") -> false
+                    bank.defaultIsRial -> rawValue >= 1000L
+                    else -> rawValue >= 1000000L
+                }
+                
+                val amountInToman = if (isRial) rawValue / 10L else rawValue
+                val isIncome = sign == "+"
+                return Pair(amountInToman, isRial)
+            }
+        }
+        
         val patterns = listOf(
-            // ۱. الگوی نئوبانکی با علامت مثبت یا منفی (اولویت بالا برای فرمت‌هایی مثل "-2,060,000")
-            Pattern.compile("""(?:^|\s)([+\-]\s*[0-9,]{3,})\b"""),
             // ۲. الگوی استاندارد بانکی با کلمات کلیدی مشخص
             Pattern.compile("""(?:مبلغ|واریز|برداشت|خرید|انتقال|کسر|بدهکار|بستانکار|حقوق|سود|قبض|پرداخت)[\s:]*[+\-]?\s*([0-9,]+)\s*(ریال|تومان|تومن)?"""),
             // ۳. الگوی عددی به همراه قید واحد پول (ریال یا تومان)
