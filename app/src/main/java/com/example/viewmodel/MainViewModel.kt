@@ -48,12 +48,11 @@ import com.example.data.SavingsGoal
 import com.example.data.SavingsGoalRepository
 import com.example.data.PendingBankSms
 import com.example.data.PendingBankSmsRepository
-import com.example.backup.BackupCryptoManager
 import com.example.backup.BackupMetadata
-import com.example.backup.BackupRestoreRepository
 import com.example.backup.CloudBackupState
 import com.example.backup.GoogleAccountState
-import com.example.backup.GoogleDriveServiceHelper
+import com.example.backup.FirebaseAuthManager
+import com.example.backup.FirebaseBackupRepository
 import com.example.backup.KisehBackupPayload
 import com.example.data.RecurringTransaction
 import com.example.data.RecurringTransactionRepository
@@ -83,7 +82,8 @@ class MainViewModel(application: Application) : AndroidViewModel(application) {
     private val categoryRepository: CategoryRepository
     private val pendingBankSmsRepository: PendingBankSmsRepository
     private val securityManager: SecurityPreferencesManager
-    private val backupRestoreRepository: BackupRestoreRepository
+    private val firebaseAuthManager: FirebaseAuthManager
+    private val firebaseBackupRepository: FirebaseBackupRepository
     private val userCategoryLearner: UserCategoryLearner = UserCategoryLearner.getInstance(application)
     private val analyzer = ExpenseAnalyzer()
 
@@ -91,8 +91,7 @@ class MainViewModel(application: Application) : AndroidViewModel(application) {
     private val _cloudBackupState = MutableStateFlow<CloudBackupState>(CloudBackupState.Idle)
     val cloudBackupState: StateFlow<CloudBackupState> = _cloudBackupState.asStateFlow()
 
-    private val _googleAccountState = MutableStateFlow<GoogleAccountState>(GoogleAccountState.Disconnected)
-    val googleAccountState: StateFlow<GoogleAccountState> = _googleAccountState.asStateFlow()
+    val googleAccountState: StateFlow<GoogleAccountState>
 
     private val _lastBackupMetadata = MutableStateFlow<BackupMetadata?>(null)
     val lastBackupMetadata: StateFlow<BackupMetadata?> = _lastBackupMetadata.asStateFlow()
@@ -147,19 +146,26 @@ class MainViewModel(application: Application) : AndroidViewModel(application) {
         categoryRepository = CategoryRepository(customCatDao)
         pendingBankSmsRepository = PendingBankSmsRepository(pendingSmsDao)
         securityManager = SecurityPreferencesManager(application)
-        val driveHelper = GoogleDriveServiceHelper(application)
-        backupRestoreRepository = BackupRestoreRepository(
+
+        // ⭐ Firebase Auth & Backup
+        firebaseAuthManager = FirebaseAuthManager(application)
+        firebaseBackupRepository = FirebaseBackupRepository(
             database = database,
             transactionDao = dao,
             savingsGoalDao = goalsDao,
             recurringTransactionDao = recurringDao,
             customCategoryDao = customCatDao,
-            driveHelper = driveHelper,
+            authManager = firebaseAuthManager,
             context = application
         )
 
-        _googleAccountState.value = backupRestoreRepository.getAccountState()
-        _lastBackupMetadata.value = backupRestoreRepository.getLastBackupMetadata()
+        // StateFlow وضعیت حساب از FirebaseAuthManager
+        googleAccountState = firebaseAuthManager.accountState
+
+        // بارگذاری متادیتای آخرین بکاپ (اگر وجود داشته باشد)
+        viewModelScope.launch {
+            refreshBackupMetadata()
+        }
 
         isAppLockEnabled = securityManager.isAppLockEnabled
             .stateIn(viewModelScope, SharingStarted.Eagerly, false)
@@ -304,7 +310,6 @@ class MainViewModel(application: Application) : AndroidViewModel(application) {
                     workRequest
                 )
 
-            // بررسی فوری در شروع برای ثبت سررسیدهای رسیده
             val immediateWork = OneTimeWorkRequestBuilder<RecurringTransactionWorker>().build()
             WorkManager.getInstance(getApplication()).enqueue(immediateWork)
         } catch (_: Exception) {}
@@ -335,16 +340,13 @@ class MainViewModel(application: Application) : AndroidViewModel(application) {
         val oneMonthMs = 30 * oneDayMs
 
         transactions.filter { tx ->
-            // Search filter
             val matchesQuery = query.isBlank() ||
                     tx.description.contains(query, ignoreCase = true) ||
                     tx.category.contains(query, ignoreCase = true) ||
                     tx.amount.toString().contains(query)
 
-            // Category filter
             val matchesCategory = category == null || tx.category == category
 
-            // Period filter
             val matchesPeriod = when (period) {
                 PeriodFilter.ALL -> true
                 PeriodFilter.TODAY -> (now - tx.date) <= oneDayMs
@@ -619,14 +621,13 @@ class MainViewModel(application: Application) : AndroidViewModel(application) {
                 period = period,
                 startDate = startDate,
                 endDate = endDate,
-                nextExecutionDate = startDate, // اولین اجرا در تاریخ شروع تعیین‌شده
+                nextExecutionDate = startDate,
                 lastExecutedDate = null,
                 isActive = true,
                 note = note.trim()
             )
             recurringTransactionRepository.insert(item)
 
-            // بررسی فوری در صورتی که تاریخ شروع هم‌اکنون رسیده باشد
             if (startDate <= System.currentTimeMillis()) {
                 triggerProcessRecurringTransactions()
             }
@@ -735,7 +736,6 @@ class MainViewModel(application: Application) : AndroidViewModel(application) {
                 )
             }
 
-            // اشتراک‌گذاری PDF
             val uri = FileProvider.getUriForFile(
                 getApplication(),
                 "${getApplication<Application>().packageName}.fileprovider",
@@ -859,14 +859,12 @@ class MainViewModel(application: Application) : AndroidViewModel(application) {
                     csv.toString()
                 }
 
-                // Internal app storage backup dir
                 val appDir = File(context.getExternalFilesDir(Environment.DIRECTORY_DOCUMENTS), "My Kiseh backup").apply {
                     if (!exists()) mkdirs()
                 }
                 val outputFile = File(appDir, fileName)
                 outputFile.writeText(fileContent, Charsets.UTF_8)
 
-                // Copy to Public Downloads/My Kiseh backup
                 try {
                     val publicFolder = File(
                         Environment.getExternalStoragePublicDirectory(Environment.DIRECTORY_DOWNLOADS),
@@ -923,7 +921,6 @@ class MainViewModel(application: Application) : AndroidViewModel(application) {
                 val importedList = mutableListOf<Transaction>()
 
                 if (trimmed.startsWith("[") || trimmed.startsWith("{")) {
-                    // Parse JSON format
                     val jsonArray = if (trimmed.startsWith("[")) {
                         JSONArray(trimmed)
                     } else {
@@ -951,16 +948,13 @@ class MainViewModel(application: Application) : AndroidViewModel(application) {
                         }
                     }
                 } else {
-                    // Parse CSV format
                     val lines = trimmed.split("\n").map { it.trim() }.filter { it.isNotBlank() }
                     if (lines.isEmpty()) throw Exception("فایل انتخاب شده خالی است")
 
-                    // Skip header line if it contains Persian or English headers
                     val startIndex = if (lines[0].contains("شناسه") || lines[0].contains("amount") || lines[0].contains("دسته‌بندی")) 1 else 0
 
                     for (i in startIndex until lines.size) {
                         val line = lines[i]
-                        // Simple CSV parser handling quoted strings
                         val parts = line.split(",(?=(?:[^\"]*\"[^\"]*\")*[^\"]*$)".toRegex()).map {
                             it.replace("^\"|\"$".toRegex(), "").trim()
                         }
@@ -971,9 +965,7 @@ class MainViewModel(application: Application) : AndroidViewModel(application) {
                             var description = ""
                             var isIncome = false
 
-                            // Map columns conditionally based on length
                             if (parts.size >= 6) {
-                                // Standard Kiseh CSV export: id, date, category, description, amount, type
                                 category = parts[2].ifBlank { "متفرقه" }
                                 description = parts[3]
                                 amount = parts[4].replace("[^0-9]".toRegex(), "").toLongOrNull() ?: 0L
@@ -1222,41 +1214,116 @@ class MainViewModel(application: Application) : AndroidViewModel(application) {
         return BiometricAuthManager.checkBiometricAvailability(getApplication())
     }
 
-    // --- Cloud Backup & Restore Operations ---
+    // =========================================================================
+    // Cloud Backup & Restore Operations (Firebase)
+    // =========================================================================
 
+    /**
+     * ورود با ایمیل و رمز عبور به Firebase
+     */
+    fun signInWithEmail(email: String, password: String) {
+        if (!BillingManager.isProUser(getApplication())) {
+            _cloudBackupState.value = CloudBackupState.Error("بکاپ ابری فقط مخصوص مشترکین نسخه VIP می‌باشد.")
+            return
+        }
+        viewModelScope.launch {
+            _cloudBackupState.value = CloudBackupState.InProgress("در حال ورود به حساب کاربری...")
+            val result = firebaseAuthManager.signIn(email, password)
+            result.onSuccess {
+                _cloudBackupState.value = CloudBackupState.Success("ورود با موفقیت انجام شد.")
+                // بارگذاری متادیتای آخرین بکاپ
+                refreshBackupMetadata()
+            }.onFailure { error ->
+                _cloudBackupState.value = CloudBackupState.Error(
+                    error.localizedMessage ?: "خطا در ورود"
+                )
+            }
+        }
+    }
+
+    /**
+     * ثبت‌نام با ایمیل، رمز عبور و نام نمایشی در Firebase
+     */
+    fun signUpWithEmail(email: String, password: String, displayName: String) {
+        if (!BillingManager.isProUser(getApplication())) {
+            _cloudBackupState.value = CloudBackupState.Error("بکاپ ابری فقط مخصوص مشترکین نسخه VIP می‌باشد.")
+            return
+        }
+        viewModelScope.launch {
+            _cloudBackupState.value = CloudBackupState.InProgress("در حال ساخت حساب کاربری...")
+            val result = firebaseAuthManager.signUp(email, password, displayName)
+            result.onSuccess {
+                _cloudBackupState.value = CloudBackupState.Success("حساب کاربری با موفقیت ساخته شد.")
+            }.onFailure { error ->
+                _cloudBackupState.value = CloudBackupState.Error(
+                    error.localizedMessage ?: "خطا در ثبت‌نام"
+                )
+            }
+        }
+    }
+
+    /**
+     * خروج از حساب کاربری Firebase
+     */
+    fun disconnectGoogleAccount() {
+        firebaseAuthManager.signOut()
+        _lastBackupMetadata.value = null
+        _availableBackups.value = emptyList()
+        _cloudBackupState.value = CloudBackupState.Idle
+    }
+
+    /**
+     * متد سازگاری با نسخه قبلی UI - فقط برای جلوگیری از خطای کامپایل
+     * (توصیه می‌شود UI به signInWithEmail و signUpWithEmail منتقل شود)
+     */
+    @Deprecated("از signInWithEmail و signUpWithEmail استفاده کنید", ReplaceWith("signInWithEmail"))
     fun connectGoogleAccount(email: String, displayName: String?) {
-        backupRestoreRepository.saveAccount(email, displayName)
-        _googleAccountState.value = GoogleAccountState.Connected(
-            email = email,
-            displayName = displayName ?: email.substringBefore("@")
+        _cloudBackupState.value = CloudBackupState.Error(
+            "برای اتصال به حساب ابری، لطفاً از رمز عبور استفاده کنید. صفحه ورود به‌روزرسانی می‌شود."
         )
     }
 
-    fun disconnectGoogleAccount() {
-        backupRestoreRepository.signOut()
-        _googleAccountState.value = GoogleAccountState.Disconnected
-    }
-
+    /**
+     * بارگذاری متادیتای آخرین بکاپ از Firestore
+     */
     fun refreshBackupMetadata() {
-        _lastBackupMetadata.value = backupRestoreRepository.getLastBackupMetadata()
+        if (!firebaseAuthManager.isSignedIn()) {
+            _lastBackupMetadata.value = null
+            return
+        }
+        viewModelScope.launch {
+            val result = firebaseBackupRepository.listAvailableBackups()
+            result.onSuccess { list ->
+                _lastBackupMetadata.value = list.firstOrNull()
+            }.onFailure {
+                _lastBackupMetadata.value = null
+            }
+        }
     }
 
     fun resetCloudBackupState() {
         _cloudBackupState.value = CloudBackupState.Idle
     }
 
+    /**
+     * ایجاد بکاپ ابری در Firebase
+     */
     fun createCloudBackup() {
-        if (!com.example.billing.BillingManager.isProUser(getApplication())) {
+        if (!BillingManager.isProUser(getApplication())) {
             _cloudBackupState.value = CloudBackupState.Error("پشتیبان‌گیری ابری فقط مخصوص مشترکین نسخه VIP می‌باشد.")
             return
         }
+        if (!firebaseAuthManager.isSignedIn()) {
+            _cloudBackupState.value = CloudBackupState.Error("لطفاً ابتدا وارد حساب کاربری شوید.")
+            return
+        }
         viewModelScope.launch {
-            _cloudBackupState.value = CloudBackupState.InProgress("در حال استخراج و رمزنگاری امن اطلاعات...")
-            val result = backupRestoreRepository.createAndUploadBackup(
+            _cloudBackupState.value = CloudBackupState.InProgress("در حال استخراج، رمزنگاری و ارسال اطلاعات به فضای ابری...")
+            val result = firebaseBackupRepository.createAndUploadBackup(
                 budgetLimit = _budgetLimit.value,
                 isCurrencyInRial = _isCurrencyInRial.value,
                 selectedPeriod = _selectedPeriod.value,
-                isVip = com.example.billing.BillingManager.isProUser(getApplication())
+                isVip = BillingManager.isProUser(getApplication())
             )
 
             result.onSuccess { metadata ->
@@ -1273,21 +1340,22 @@ class MainViewModel(application: Application) : AndroidViewModel(application) {
         }
     }
 
+    /**
+     * دریافت لیست بکاپ‌های موجود در Firestore
+     */
     fun fetchAvailableBackups() {
-        if (!com.example.billing.BillingManager.isProUser(getApplication())) {
+        if (!BillingManager.isProUser(getApplication())) {
             _cloudBackupState.value = CloudBackupState.Error("بازیابی اطلاعات ابری فقط مخصوص مشترکین نسخه VIP می‌باشد.")
             return
         }
-        Log.i("GoogleDriveBackup", "Restore Click: user requested backup restoration")
-        val currentAccount = _googleAccountState.value
-        if (currentAccount !is GoogleAccountState.Connected) {
-            _cloudBackupState.value = CloudBackupState.Error("دسترسی Google Drive کافی نیست: لطفاً ابتدا به حساب گوگل متصل شوید.")
+        if (!firebaseAuthManager.isSignedIn()) {
+            _cloudBackupState.value = CloudBackupState.Error("لطفاً ابتدا وارد حساب کاربری خود شوید.")
             return
         }
 
         viewModelScope.launch {
             _cloudBackupState.value = CloudBackupState.CheckingBackups("در حال بررسی نسخه‌های پشتیبان...")
-            val result = backupRestoreRepository.listAvailableBackups()
+            val result = firebaseBackupRepository.listAvailableBackups()
             result.onSuccess { list ->
                 if (list.isEmpty()) {
                     _availableBackups.value = emptyList()
@@ -1305,13 +1373,15 @@ class MainViewModel(application: Application) : AndroidViewModel(application) {
         }
     }
 
+    /**
+     * بازیابی نسخه مشخص از Firestore
+     */
     fun restoreSelectedBackup(metadata: BackupMetadata, onSuccess: (KisehBackupPayload) -> Unit = {}) {
         viewModelScope.launch {
             _cloudBackupState.value = CloudBackupState.InProgress("در حال دانلود، رمزگشایی و بازیابی نسخه پشتیبان...")
-            val result = backupRestoreRepository.restoreBackup(metadata.fileId)
+            val result = firebaseBackupRepository.restoreBackup(metadata.fileName)
 
             result.onSuccess { payload ->
-                // بازیابی ترجیحات عمومی
                 _budgetLimit.value = payload.appPreferences.budgetLimit
                 _isCurrencyInRial.value = payload.appPreferences.isCurrencyInRial
                 _selectedPeriod.value = payload.appPreferences.selectedPeriod
@@ -1337,14 +1407,19 @@ class MainViewModel(application: Application) : AndroidViewModel(application) {
         }
     }
 
+    /**
+     * بازیابی آخرین نسخه پشتیبان از Firestore
+     */
     fun restoreCloudBackup(onSuccess: (KisehBackupPayload) -> Unit = {}) {
-        Log.i("GoogleDriveBackup", "Restore Click: user requested backup restoration")
+        if (!firebaseAuthManager.isSignedIn()) {
+            _cloudBackupState.value = CloudBackupState.Error("لطفاً ابتدا وارد حساب کاربری خود شوید.")
+            return
+        }
         viewModelScope.launch {
             _cloudBackupState.value = CloudBackupState.InProgress("در حال دانلود، رمزگشایی و اعتبارسنجی نسخه ابری...")
-            val result = backupRestoreRepository.restoreBackup()
+            val result = firebaseBackupRepository.restoreBackup()
 
             result.onSuccess { payload ->
-                // بازیابی ترجیحات عمومی
                 _budgetLimit.value = payload.appPreferences.budgetLimit
                 _isCurrencyInRial.value = payload.appPreferences.isCurrencyInRial
                 _selectedPeriod.value = payload.appPreferences.selectedPeriod

@@ -52,7 +52,10 @@ class MainActivity : FragmentActivity() {
     private val permissionLauncher = registerForActivityResult(
         ActivityResultContracts.RequestMultiplePermissions()
     ) { _ ->
-        QuickVoiceNotificationHelper.showQuickVoiceNotification(this)
+        // بعد از دریافت مجوزها، اعلان را به‌روزرسانی کن
+        try {
+            QuickVoiceNotificationHelper.showQuickVoiceNotification(this)
+        } catch (_: Throwable) {}
     }
 
     override fun onCreate(savedInstanceState: Bundle?) {
@@ -67,12 +70,13 @@ class MainActivity : FragmentActivity() {
             requestRequiredPermissions()
         } catch (_: Throwable) {}
 
+        // شروع سرویس پس‌زمینه برای زنده نگه داشتن برنامه جهت دریافت پیامک و ویجت
+        startBackgroundService()
+
+        // به‌روزرسانی اعلان سرویس پس‌زمینه بر اساس وضعیت ثبت صوتی (VIP)
         try {
             QuickVoiceNotificationHelper.showQuickVoiceNotification(this)
         } catch (_: Throwable) {}
-
-        // شروع سرویس پس‌زمینه برای زنده نگه داشتن برنامه جهت دریافت پیامک و ویجت
-        startBackgroundService()
 
         // درخواست معافیت از بهینه‌سازی باتری برای پایدار ماندن سرویس
         requestIgnoreBatteryOptimization()
@@ -165,6 +169,10 @@ class MainActivity : FragmentActivity() {
                             com.example.billing.BillingManager.setVipUser(this, true, token, time, productId)
                             android.util.Log.d("BillingManager", "VIP Activated: token=$token, time=$time, product=$productId")
                             android.widget.Toast.makeText(this, "🎉 خرید با موفقیت تایید شد! دسترسی دائم VIP فعال گردید.", android.widget.Toast.LENGTH_LONG).show()
+                            // بعد از فعال شدن VIP، اعلان سرویس را به‌روزرسانی کن
+                            try {
+                                QuickVoiceNotificationHelper.showQuickVoiceNotification(this)
+                            } catch (_: Throwable) {}
                             return
                         } else {
                             android.widget.Toast.makeText(this, "وضعیت خرید معتبر نیست (کد وضعیت: $purchaseState).", android.widget.Toast.LENGTH_SHORT).show()
@@ -179,6 +187,9 @@ class MainActivity : FragmentActivity() {
                     com.example.billing.BillingManager.setVipUser(this, true, null, System.currentTimeMillis(), com.example.billing.BillingManager.SKU_PRO_LIFETIME)
                     android.util.Log.d("BillingManager", "VIP Activated (Item already owned)")
                     android.widget.Toast.makeText(this, "🎉 این اشتراک قبلاً خریداری شده است و دسترسی VIP فعال گردید.", android.widget.Toast.LENGTH_LONG).show()
+                    try {
+                        QuickVoiceNotificationHelper.showQuickVoiceNotification(this)
+                    } catch (_: Throwable) {}
                     return
                 } else if (responseCode != 0) {
                     val errorMsg = com.example.billing.BillingManager.getBillingErrorMessage(responseCode)

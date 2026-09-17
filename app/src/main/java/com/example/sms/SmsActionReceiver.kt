@@ -82,44 +82,27 @@ class SmsActionReceiver : BroadcastReceiver() {
                                 }
                             }
 
-                            // بررسی محافظت در برابر تکراری قبل از درج تراکنش
-                            val isDuplicate = BankSmsDuplicateDetector.isDuplicate(
-                                context = appContext,
-                                bankName = pending.bankName,
+                            // ⭐ اصلاح: چک تکراری حذف شد (قبلاً هنگام دریافت پیامک انجام شده)
+                            // حالا مستقیماً تراکنش ثبت می‌شود
+                            val transaction = Transaction(
                                 amount = pending.amount,
+                                category = SmartCategoryMatcher.toCanonicalKisehCategory(pending.suggestedCategory),
+                                description = description,
                                 isIncome = pending.isIncome,
-                                cardLastDigits = pending.cardLastDigits,
-                                merchant = pending.merchant,
-                                timestamp = pending.createdAt
+                                date = pending.createdAt
                             )
-
-                            if (!isDuplicate) {
-                                val transaction = Transaction(
-                                    amount = pending.amount,
-                                    category = SmartCategoryMatcher.toCanonicalKisehCategory(pending.suggestedCategory),
-                                    description = description,
-                                    isIncome = pending.isIncome,
-                                    date = pending.createdAt
-                                )
-                                database.transactionDao().insert(transaction)
-                                BankSmsDuplicateDetector.recordProcessed(
-                                    bankName = pending.bankName,
-                                    amount = pending.amount,
-                                    isIncome = pending.isIncome,
-                                    cardLastDigits = pending.cardLastDigits,
-                                    merchant = pending.merchant,
-                                    timestamp = pending.createdAt
-                                )
-                            }
+                            database.transactionDao().insert(transaction)
                             repository.markAsConfirmed(smsId)
+                            android.util.Log.d("BANK_SMS_DEBUG", "ACTION_CONFIRM: transaction inserted (id=${transaction.id})")
                         }
                     }
                     ACTION_REJECT -> {
                         repository.markAsRejected(smsId)
+                        android.util.Log.d("BANK_SMS_DEBUG", "ACTION_REJECT: pending marked as rejected")
                     }
                 }
             } catch (e: Exception) {
-                // نادیده گرفتن خطا جهت پایداری بدون کرش
+                android.util.Log.e("BANK_SMS_DEBUG", "SmsActionReceiver error", e)
             } finally {
                 pendingPendingResult.finish()
             }
