@@ -1,4 +1,4 @@
-package com.example
+﻿package com.example
 
 import android.Manifest
 import android.content.Context
@@ -147,8 +147,8 @@ class MainActivity : FragmentActivity() {
                         android.util.Log.d("BillingManager", "Purchase State: $purchaseState")
                         android.util.Log.d("BillingManager", "Verify Started: productId=$productId, signature=$dataSignature")
 
-                        val isVerified = if (!dataSignature.isNullOrBlank() && com.example.billing.BillingManager.MYKET_PUBLIC_KEY.isNotBlank()) {
-                            com.example.billing.BillingManager.verifyPurchase(purchaseData, dataSignature, com.example.billing.BillingManager.MYKET_PUBLIC_KEY)
+                        val isVerified = if (!dataSignature.isNullOrBlank() && com.example.billing.BillingManager.BAZAAR_PUBLIC_KEY.isNotBlank()) {
+                            com.example.billing.BillingManager.verifyPurchase(purchaseData, dataSignature, com.example.billing.BillingManager.BAZAAR_PUBLIC_KEY)
                         } else {
                             true
                         }
@@ -180,7 +180,7 @@ class MainActivity : FragmentActivity() {
                         }
                     } catch (e: Throwable) {
                         android.util.Log.e("BillingManager", "Error parsing onActivityResult purchaseData", e)
-                        android.widget.Toast.makeText(this, "خطا در پردازش اطلاعات خرید دریافتی از مایکت.", android.widget.Toast.LENGTH_SHORT).show()
+                        android.widget.Toast.makeText(this, "خطا در پردازش اطلاعات خرید دریافتی از کافهبازار.", android.widget.Toast.LENGTH_SHORT).show()
                         return
                     }
                 } else if (responseCode == 7) {

@@ -1,4 +1,4 @@
-package com.example.ui.screens
+﻿package com.example.ui.screens
 
 import android.graphics.Bitmap
 import android.graphics.BitmapFactory
@@ -184,7 +184,7 @@ fun ReceiptScannerScreen(
                             shape = RoundedCornerShape(10.dp),
                             contentPadding = PaddingValues(horizontal = 10.dp, vertical = 4.dp)
                         ) {
-                            Text("خرید VIP از مایکت", fontSize = 11.sp, fontWeight = FontWeight.Bold)
+                            Text("خرید VIP از کافهبازار", fontSize = 11.sp, fontWeight = FontWeight.Bold)
                         }
                     }
                 }

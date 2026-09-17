@@ -1,4 +1,4 @@
-package com.example.sms
+﻿package com.example.sms
 
 import android.content.Context
 import android.content.SharedPreferences
@@ -126,7 +126,7 @@ object SmartCategoryMatcher {
         ),
         CAT_ONLINE_SERVICES to listOf(
             "دیجی کالا", "دیجیکالا", "اسنپ مارکت", "ترب", "ایمالز", "تکنولایف", "باسلام",
-            "کافه بازار", "مایکت", "فیلیمو", "نماوا", "فیلم نت", "زرین پال", "آپ", "تاپ", "بله"
+            "کافه بازار", "کافهبازار", "فیلیمو", "نماوا", "فیلم نت", "زرین پال", "آپ", "تاپ", "بله"
         ),
         CAT_INCOME to listOf(
             "حقوق", "دستمزد", "واریز حقوق", "پاداش", "عیدی", "سنوات", "تسویه حساب",

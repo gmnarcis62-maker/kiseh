@@ -1,4 +1,4 @@
-package com.example.ui.components
+﻿package com.example.ui.components
 
 import androidx.compose.foundation.layout.*
 import androidx.compose.foundation.rememberScrollState
@@ -159,7 +159,7 @@ fun FreePlanReminderBottomSheet(
                     )
                     Spacer(modifier = Modifier.width(8.dp))
                     Text(
-                        text = "فعال‌سازی VIP از مایکت",
+                        text = "فعال‌سازی VIP از کافهبازار",
                         fontWeight = FontWeight.Bold,
                         color = Color.Black,
                         fontSize = 15.sp

@@ -1,4 +1,4 @@
-package com.example.ui.screens
+﻿package com.example.ui.screens
 
 import android.widget.Toast
 import androidx.compose.animation.AnimatedVisibility
@@ -165,10 +165,10 @@ fun RecurringTransactionsSection(
                                 colors = ButtonDefaults.buttonColors(containerColor = GoldAccent),
                                 shape = RoundedCornerShape(10.dp),
                                 contentPadding = PaddingValues(horizontal = 10.dp, vertical = 4.dp),
-                                modifier = Modifier.testTag("buy_vip_from_myket_recurring")
+                                modifier = Modifier.testTag("buy_vip_from_bazaar_recurring")
                             ) {
                                 Text(
-                                    text = "خرید VIP از مایکت",
+                                    text = "خرید VIP از کافهبازار",
                                     color = Color.Black,
                                     fontSize = 11.sp,
                                     fontWeight = FontWeight.Bold

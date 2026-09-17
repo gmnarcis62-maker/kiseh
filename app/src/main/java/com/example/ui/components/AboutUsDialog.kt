@@ -1,4 +1,4 @@
-package com.example.ui.components
+﻿package com.example.ui.components
 
 import android.content.Context
 import android.content.Intent
@@ -212,47 +212,47 @@ fun AboutUsDialog(
                         }
                     }
 
-                    // Myket Review Rate Button
+                    // Bazaar Review Rate Button
                     Button(
                         onClick = {
                             val packageName = context.packageName
                             try {
-                                val intent = Intent(Intent.ACTION_VIEW, Uri.parse("myket://comment?id=$packageName")).apply {
-                                    setPackage("ir.mservices.market")
+                                val intent = Intent(Intent.ACTION_VIEW, Uri.parse("bazaar://comment?id=$packageName")).apply {
+                                    setPackage("com.farsitel.bazaar")
                                 }
                                 context.startActivity(intent)
                             } catch (_: Exception) {
                                 try {
-                                    val intent = Intent(Intent.ACTION_VIEW, Uri.parse("myket://comment?id=$packageName"))
+                                    val intent = Intent(Intent.ACTION_VIEW, Uri.parse("bazaar://comment?id=$packageName"))
                                     context.startActivity(intent)
                                 } catch (_: Exception) {
                                     try {
-                                        val intent = Intent(Intent.ACTION_VIEW, Uri.parse("https://myket.ir/app/$packageName"))
+                                        val intent = Intent(Intent.ACTION_VIEW, Uri.parse("https://bazaar.ir/app/$packageName"))
                                         context.startActivity(intent)
                                     } catch (e: Exception) {
-                                        Toast.makeText(context, "برنامه مایکت روی گوشی شما یافت نشد", Toast.LENGTH_SHORT).show()
+                                        Toast.makeText(context, "برنامه کافهبازار روی گوشی شما یافت نشد", Toast.LENGTH_SHORT).show()
                                     }
                                 }
                             }
                         },
                         modifier = Modifier
                             .fillMaxWidth()
-                            .testTag("rate_app_myket_button"),
+                            .testTag("rate_app_bazaar_button"),
                         shape = RoundedCornerShape(12.dp),
                         colors = ButtonDefaults.buttonColors(
-                            containerColor = Color(0xFF1E88E5) // Myket blue
+                            containerColor = Color(0xFF1E88E5) // Bazaar blue
                         )
                     ) {
                         Row(verticalAlignment = Alignment.CenterVertically) {
                             Icon(
                                 imageVector = Icons.Default.Star,
-                                contentDescription = "مایکت",
+                                contentDescription = "کافهبازار",
                                 tint = GoldAccent,
                                 modifier = Modifier.size(18.dp)
                             )
                             Spacer(modifier = Modifier.width(8.dp))
                             Text(
-                                text = "امتیاز به برنامه در مایکت",
+                                text = "امتیاز به برنامه در کافهبازار",
                                 fontWeight = FontWeight.Bold,
                                 color = Color.White,
                                 fontSize = 13.sp

@@ -1,4 +1,4 @@
-package com.example.billing
+﻿package com.example.billing
 
 import android.content.Context
 import androidx.datastore.core.DataStore
@@ -29,7 +29,7 @@ data class VipPurchaseInfo(
 
 /**
  * مدیریت ماندگار وضعیت اشتراک VIP با Jetpack DataStore
- * منبع اصلی و معتبر فعال بودن VIP و خرید تایید شده مایکت
+ * منبع اصلی و معتبر فعال بودن VIP و خرید تایید شده کافهبازار
  */
 class VipPreferencesManager(private val context: Context) {
 
