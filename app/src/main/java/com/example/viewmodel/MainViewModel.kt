@@ -516,7 +516,7 @@ class MainViewModel(application: Application) : AndroidViewModel(application) {
         }
     }
 
-    // Savings Goals
+    // ========== Savings Goals ==========
     fun addSavingsGoal(
         title: String,
         targetAmount: Long,
@@ -556,7 +556,7 @@ class MainViewModel(application: Application) : AndroidViewModel(application) {
         viewModelScope.launch { savingsGoalRepository.addDeposit(goalId, depositAmount) }
     }
 
-    // Recurring Transactions
+    // ========== Recurring Transactions ==========
     fun addRecurringTransaction(
         title: String,
         amount: Long,
@@ -767,14 +767,294 @@ class MainViewModel(application: Application) : AndroidViewModel(application) {
         }
     }
 
+    fun exportCustomBackup(context: Context, userCustomName: String, isJson: Boolean) {
+        viewModelScope.launch(Dispatchers.IO) {
+            try {
+                val rawName = userCustomName.trim().ifBlank { "پشتیبان_کیسه" }
+                val sanitizedName = rawName.replace(Regex("[^a-zA-Z0-9_آ-ی0-9\\s\\-]"), "_").replace("\\s+".toRegex(), "_")
+                val shamsiDateTime = PersianUtils.getShamsiDateTimeForFilename(System.currentTimeMillis())
+                val extension = if (isJson) "json" else "csv"
+                val fileName = "${sanitizedName}_${shamsiDateTime}.${extension}"
+
+                val transactions = allTransactions.value
+                val fileContent = if (isJson) {
+                    val jsonArray = JSONArray()
+                    transactions.forEach { tx ->
+                        val obj = JSONObject().apply {
+                            put("amount", tx.amount)
+                            put("category", tx.category)
+                            put("description", tx.description)
+                            put("isIncome", tx.isIncome)
+                            put("date", tx.date)
+                        }
+                        jsonArray.put(obj)
+                    }
+                    jsonArray.toString(2)
+                } else {
+                    val csv = StringBuilder()
+                    csv.append("شناسه,تاریخ,دسته‌بندی,توضیحات,مبلغ (تومان),نوع\n")
+                    transactions.forEach { tx ->
+                        val type = if (tx.isIncome) "درآمد" else "هزینه"
+                        val shamsiDateStr = PersianUtils.getShamsiDateString(tx.date)
+                        csv.append("${tx.id},\"$shamsiDateStr\",\"${tx.category.replace("\"", "\"\"")}\",\"${tx.description.replace("\"", "\"\"")}\",${tx.amount},$type\n")
+                    }
+                    csv.toString()
+                }
+
+                val appDir = File(context.getExternalFilesDir(Environment.DIRECTORY_DOCUMENTS), "My Kiseh backup").apply {
+                    if (!exists()) mkdirs()
+                }
+                val outputFile = File(appDir, fileName)
+                outputFile.writeText(fileContent, Charsets.UTF_8)
+
+                try {
+                    val publicFolder = File(
+                        Environment.getExternalStoragePublicDirectory(Environment.DIRECTORY_DOWNLOADS),
+                        "My Kiseh backup"
+                    ).apply { if (!exists()) mkdirs() }
+                    outputFile.copyTo(File(publicFolder, fileName), overwrite = true)
+                } catch (_: Exception) {}
+
+                val uri: Uri = FileProvider.getUriForFile(
+                    context,
+                    "${context.packageName}.fileprovider",
+                    outputFile
+                )
+
+                val mimeType = if (isJson) "application/json" else "text/csv"
+                val shareIntent = Intent(Intent.ACTION_SEND).apply {
+                    type = mimeType
+                    putExtra(Intent.EXTRA_STREAM, uri)
+                    putExtra(Intent.EXTRA_SUBJECT, "فایل پشتیبان اطلاعات کیسه ($fileName)")
+                    putExtra(Intent.EXTRA_TEXT, "فایل پشتیبان اطلاعات کیسه با تاریخ شمسی $shamsiDateTime")
+                    addFlags(Intent.FLAG_GRANT_READ_URI_PERMISSION)
+                }
+
+                val chooser = Intent.createChooser(shareIntent, "اشتراک‌گذاری فایل پشتیبان").apply {
+                    addFlags(Intent.FLAG_ACTIVITY_NEW_TASK)
+                    addFlags(Intent.FLAG_GRANT_READ_URI_PERMISSION)
+                }
+
+                withContext(Dispatchers.Main) {
+                    Toast.makeText(context, "✅ پشتیبان با نام «$fileName» ذخیره شد", Toast.LENGTH_LONG).show()
+                    context.startActivity(chooser)
+                }
+            } catch (e: Exception) {
+                withContext(Dispatchers.Main) {
+                    Toast.makeText(context, "خطا در ساخت پشتیبان: ${e.message}", Toast.LENGTH_LONG).show()
+                }
+            }
+        }
+    }
+
+    fun importBackupFromFile(context: Context, uri: Uri) {
+        viewModelScope.launch(Dispatchers.IO) {
+            try {
+                val contentResolver = context.contentResolver
+                val contentString = contentResolver.openInputStream(uri)?.use { stream ->
+                    stream.bufferedReader(Charsets.UTF_8).readText()
+                } ?: throw Exception("امکان خواندن فایل پشتیبان وجود ندارد")
+
+                val trimmed = contentString.trim()
+                val importedList = mutableListOf<Transaction>()
+
+                if (trimmed.startsWith("[") || trimmed.startsWith("{")) {
+                    val jsonArray = if (trimmed.startsWith("[")) {
+                        JSONArray(trimmed)
+                    } else {
+                        JSONObject(trimmed).optJSONArray("transactions") ?: JSONArray()
+                    }
+
+                    for (i in 0 until jsonArray.length()) {
+                        val obj = jsonArray.getJSONObject(i)
+                        val amount = obj.optLong("amount", 0L)
+                        val category = obj.optString("category", "متفرقه")
+                        val description = obj.optString("description", "")
+                        val isIncome = obj.optBoolean("isIncome", false)
+                        val date = obj.optLong("date", System.currentTimeMillis())
+
+                        if (amount > 0) {
+                            importedList.add(
+                                Transaction(
+                                    amount = amount,
+                                    category = category,
+                                    description = description,
+                                    isIncome = isIncome,
+                                    date = date
+                                )
+                            )
+                        }
+                    }
+                } else {
+                    val lines = trimmed.split("\n").map { it.trim() }.filter { it.isNotBlank() }
+                    if (lines.isEmpty()) throw Exception("فایل انتخاب شده خالی است")
+
+                    val startIndex = if (lines[0].contains("شناسه") || lines[0].contains("amount") || lines[0].contains("دسته‌بندی")) 1 else 0
+
+                    for (i in startIndex until lines.size) {
+                        val line = lines[i]
+                        val parts = line.split(",(?=(?:[^\"]*\"[^\"]*\")*[^\"]*$)".toRegex()).map {
+                            it.replace("^\"|\"$".toRegex(), "").trim()
+                        }
+
+                        if (parts.size >= 4) {
+                            var amount = 0L
+                            var category = "متفرقه"
+                            var description = ""
+                            var isIncome = false
+
+                            if (parts.size >= 6) {
+                                category = parts[2].ifBlank { "متفرقه" }
+                                description = parts[3]
+                                amount = parts[4].replace("[^0-9]".toRegex(), "").toLongOrNull() ?: 0L
+                                isIncome = parts[5].contains("درآمد") || parts[5].lowercase().contains("income")
+                            } else {
+                                amount = parts.mapNotNull { col -> col.replace("[^0-9]".toRegex(), "").toLongOrNull() }.firstOrNull { it > 0 } ?: 0L
+                                category = parts.getOrNull(1)?.ifBlank { "متفرقه" } ?: "متفرقه"
+                                description = parts.getOrNull(2) ?: ""
+                                isIncome = line.contains("درآمد")
+                            }
+
+                            if (amount > 0) {
+                                importedList.add(
+                                    Transaction(
+                                        amount = amount,
+                                        category = category,
+                                        description = description,
+                                        isIncome = isIncome,
+                                        date = System.currentTimeMillis()
+                                    )
+                                )
+                            }
+                        }
+                    }
+                }
+
+                if (importedList.isEmpty()) {
+                    throw Exception("هیچ اطلاعات معتبری در فایل یافت نشد")
+                }
+
+                importedList.forEach { repository.insert(it) }
+
+                withContext(Dispatchers.Main) {
+                    Toast.makeText(context, "✅ ${importedList.size} تراکنش بازیابی شد", Toast.LENGTH_LONG).show()
+                }
+            } catch (e: Exception) {
+                withContext(Dispatchers.Main) {
+                    Toast.makeText(context, "خطا در بازیابی: ${e.message}", Toast.LENGTH_LONG).show()
+                }
+            }
+        }
+    }
+
+    fun addSampleData() {
+        viewModelScope.launch {
+            val samples = listOf(
+                Transaction(amount = 25000, category = "خوراکی", description = "نون و شیر خرید روزانه"),
+                Transaction(amount = 60000, category = "حمل‌ونقل", description = "بنزین آزاد"),
+                Transaction(amount = 180000, category = "قبض", description = "قبض برق و اینترنت همراه"),
+                Transaction(amount = 350000, category = "پوشاک", description = "خرید کفش ورزشی"),
+                Transaction(amount = 1200000, category = "درآمد", description = "پاداش واریزی کارفرما", isIncome = true),
+                Transaction(amount = 85000, category = "درمان", description = "شربت و قرص از داروخانه"),
+                Transaction(amount = 140000, category = "تفریح", description = "کافه و پیتزا با دوستان")
+            )
+            samples.forEach { repository.insert(it) }
+        }
+    }
+
+    // ========== Category Management ==========
+    fun addCustomCategory(
+        name: String,
+        iconName: String,
+        colorHex: String,
+        isIncome: Boolean,
+        onSuccess: () -> Unit = {},
+        onError: (String) -> Unit = {}
+    ) {
+        val trimmed = name.trim()
+        if (trimmed.isEmpty()) {
+            onError("لطفاً نام دسته‌بندی را وارد کنید")
+            return
+        }
+
+        val existsInDefault = CategoryHelper.categories.any { it.name.equals(trimmed, ignoreCase = true) }
+        viewModelScope.launch {
+            val app = getApplication<Application>()
+            val currentCustom = categoryRepository.allCustomCategories.first()
+            if (!FeatureUsageManager.canAddCustomCategory(app, currentCustom.size)) {
+                onError("در نسخه رایگان حداکثر ۲ دسته‌بندی اختصاصی مجاز است. برای دسته‌بندی نامحدود نسخه VIP را فعال کنید.")
+                return@launch
+            }
+
+            val existsInCustom = categoryRepository.getCategoryByName(trimmed) != null
+            if (existsInDefault || existsInCustom) {
+                onError("دسته‌بندی با نام «$trimmed» قبلاً ثبت شده است")
+                return@launch
+            }
+
+            val category = CustomCategory(
+                name = trimmed,
+                iconName = iconName,
+                colorHex = colorHex,
+                isIncome = isIncome,
+                isDefault = false
+            )
+            categoryRepository.insertCategory(category)
+            onSuccess()
+        }
+    }
+
+    fun updateCustomCategory(
+        category: CustomCategory,
+        oldName: String,
+        onSuccess: () -> Unit = {},
+        onError: (String) -> Unit = {}
+    ) {
+        val trimmed = category.name.trim()
+        if (trimmed.isEmpty()) {
+            onError("لطفاً نام دسته‌بندی را وارد کنید")
+            return
+        }
+
+        viewModelScope.launch {
+            if (!trimmed.equals(oldName, ignoreCase = true)) {
+                val existsInDefault = CategoryHelper.categories.any { it.name.equals(trimmed, ignoreCase = true) }
+                val existsInCustom = categoryRepository.getCategoryByName(trimmed) != null
+                if (existsInDefault || existsInCustom) {
+                    onError("دسته‌بندی دیگری با نام «$trimmed» وجود دارد")
+                    return@launch
+                }
+            }
+
+            categoryRepository.updateCategory(category.copy(name = trimmed))
+            if (!trimmed.equals(oldName, ignoreCase = true)) {
+                repository.updateCategoryName(oldName, trimmed)
+                recurringTransactionRepository.updateCategoryName(oldName, trimmed)
+            }
+            onSuccess()
+        }
+    }
+
+    fun deleteCustomCategory(
+        category: CustomCategory,
+        onSuccess: () -> Unit = {},
+        onError: (String) -> Unit = {}
+    ) {
+        if (category.isDefault) {
+            onError("دسته‌بندی‌های پیش‌فرض سیستم قابل حذف نیستند")
+            return
+        }
+
+        viewModelScope.launch {
+            categoryRepository.deleteCategory(category)
+            onSuccess()
+        }
+    }
+
     // =========================================================================
-    // Local Backup & Restore (SAF - کاربر محل ذخیره را انتخاب می‌کند)
+    // Local Backup & Restore (SAF)
     // =========================================================================
 
-    /**
-     * ساخت بکاپ رمزنگاری‌شده و نوشتن آن در URI انتخاب‌شده توسط کاربر.
-     * کاربر از طریق پنجره SAF (Storage Access Framework) محل و نام فایل را انتخاب می‌کند.
-     */
     fun createBackupToUri(uri: Uri) {
         viewModelScope.launch {
             _backupState.value = CloudBackupState.InProgress("در حال ساخت و رمزنگاری بکاپ...")
@@ -803,9 +1083,6 @@ class MainViewModel(application: Application) : AndroidViewModel(application) {
         }
     }
 
-    /**
-     * خواندن فایل بکاپ از URI انتخاب‌شده توسط کاربر، رمزگشایی و بازنشانی دیتابیس.
-     */
     fun restoreBackupFromUri(uri: Uri) {
         viewModelScope.launch {
             _backupState.value = CloudBackupState.InProgress("در حال خواندن و رمزگشایی فایل بکاپ...")
@@ -819,7 +1096,6 @@ class MainViewModel(application: Application) : AndroidViewModel(application) {
                     BackupCryptoManager.decryptBackup(encryptedBytes)
                 }
 
-                // بازنشانی اتمیک در دیتابیس
                 withContext(Dispatchers.IO) {
                     database.withTransaction {
                         if (payload.customCategories.isNotEmpty()) {
@@ -837,7 +1113,6 @@ class MainViewModel(application: Application) : AndroidViewModel(application) {
                     }
                 }
 
-                // بازیابی داده‌های یادگیری پیامک بانکی
                 if (payload.learnedMerchants.isNotEmpty()) {
                     try {
                         userCategoryLearner.learnAll(payload.learnedMerchants)
@@ -846,7 +1121,6 @@ class MainViewModel(application: Application) : AndroidViewModel(application) {
                     }
                 }
 
-                // بازیابی تنظیمات
                 _budgetLimit.value = payload.appPreferences.budgetLimit
                 _isCurrencyInRial.value = payload.appPreferences.isCurrencyInRial
                 _selectedPeriod.value = payload.appPreferences.selectedPeriod
@@ -865,7 +1139,7 @@ class MainViewModel(application: Application) : AndroidViewModel(application) {
             } catch (e: Exception) {
                 Log.e("LocalBackup", "Restore failed", e)
                 _backupState.value = CloudBackupState.Error(
-                    e.localizedMessage ?: "خطا در بازیابی اطلاعات. فایل ممکن است خراب یا رمزنگاری‌شده با کلید متفاوت باشد"
+                    e.localizedMessage ?: "خطا در بازیابی اطلاعات. فایل ممکن است خراب باشد"
                 )
             }
         }
@@ -875,9 +1149,6 @@ class MainViewModel(application: Application) : AndroidViewModel(application) {
         _backupState.value = CloudBackupState.Idle
     }
 
-    /**
-     * ساخت payload بکاپ از داده‌های فعلی دیتابیس
-     */
     private suspend fun buildBackupPayload(): KisehBackupPayload = withContext(Dispatchers.IO) {
         val transactions = database.transactionDao().getAllTransactionsList()
         val goals = database.savingsGoalDao().getAllGoalsList()
