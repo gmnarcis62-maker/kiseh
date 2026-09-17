@@ -43,6 +43,7 @@ import androidx.compose.runtime.setValue
 import androidx.compose.ui.Alignment
 import androidx.compose.ui.Modifier
 import androidx.compose.ui.draw.clip
+import androidx.compose.ui.graphics.Color
 import androidx.compose.ui.graphics.asImageBitmap
 import androidx.compose.ui.platform.LocalContext
 import androidx.compose.ui.text.font.FontWeight
@@ -207,7 +208,10 @@ fun ReceiptScannerScreen(
                     },
                     modifier = Modifier.weight(1f),
                     shape = RoundedCornerShape(12.dp),
-                    colors = ButtonDefaults.buttonColors(containerColor = EmeraldPrimary)
+                    colors = ButtonDefaults.buttonColors(
+                        containerColor = EmeraldPrimary,
+                        contentColor = Color.White
+                    )
                 ) {
                     Icon(imageVector = Icons.Default.CameraAlt, contentDescription = "دوربین")
                     Spacer(modifier = Modifier.width(6.dp))
@@ -226,7 +230,10 @@ fun ReceiptScannerScreen(
                     },
                     modifier = Modifier.weight(1f),
                     shape = RoundedCornerShape(12.dp),
-                    colors = ButtonDefaults.buttonColors(containerColor = MaterialTheme.colorScheme.primaryContainer)
+                    colors = ButtonDefaults.buttonColors(
+                        containerColor = EmeraldPrimary,
+                        contentColor = Color.White
+                    )
                 ) {
                     Icon(imageVector = Icons.Default.PhotoLibrary, contentDescription = "گالری")
                     Spacer(modifier = Modifier.width(6.dp))

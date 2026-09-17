@@ -27,8 +27,16 @@ class SmsActionReceiver : BroadcastReceiver() {
     override fun onReceive(context: Context, intent: Intent?) {
         if (intent == null) return
 
-        // بررسی صریح VIP: کاربران غیر VIP امکان ثبت هیچ تراکنشی از پیامک را ندارند
-        if (!com.example.billing.BillingManager.isProUser(context)) {
+        val appContext = context.applicationContext
+
+        // ⭐ ۱. اطمینان از مقداردهی اولیه BillingManager قبل از بررسی VIP
+        try {
+            com.example.billing.BillingManager.init(appContext)
+        } catch (_: Throwable) {}
+
+        // ⭐ ۲. حالا چک VIP معتبر است
+        if (!com.example.billing.BillingManager.isProUser(appContext)) {
+            android.util.Log.d("BANK_SMS_DEBUG", "SmsActionReceiver: user is not VIP, skipping")
             return
         }
 
@@ -38,27 +46,27 @@ class SmsActionReceiver : BroadcastReceiver() {
         val smsId = intent.getLongExtra(EXTRA_SMS_ID, -1L)
         val notificationId = intent.getIntExtra(EXTRA_NOTIFICATION_ID, -1)
 
-        // بستن نوتیفیکیشن در صورت وجود شناسه معتبر
+        // بستن نوتیفیکیشن
         if (notificationId != -1) {
             val notificationManager = context.getSystemService(Context.NOTIFICATION_SERVICE) as? NotificationManager
             notificationManager?.cancel(notificationId)
         }
 
-        if (smsId <= 0L) return
+        if (smsId <= 0L) {
+            android.util.Log.d("BANK_SMS_DEBUG", "SmsActionReceiver: invalid smsId=$smsId")
+            return
+        }
 
-        val prefsManager = BankSmsPreferencesManager.getInstance(context)
+        val prefsManager = BankSmsPreferencesManager.getInstance(appContext)
         if (!prefsManager.isQuickActionEnabled()) {
+            android.util.Log.d("BANK_SMS_DEBUG", "SmsActionReceiver: quick actions disabled")
             return
         }
 
         val pendingPendingResult = goAsync()
-        val appContext = context.applicationContext
 
         CoroutineScope(Dispatchers.IO).launch {
             try {
-                if (!com.example.billing.BillingManager.isProUser(appContext)) {
-                    return@launch
-                }
                 val database = AppDatabase.getDatabase(appContext)
                 val repository = PendingBankSmsRepository(database.pendingBankSmsDao())
 
@@ -66,7 +74,7 @@ class SmsActionReceiver : BroadcastReceiver() {
                     ACTION_CONFIRM -> {
                         val pending = repository.getById(smsId)
                         if (pending != null && pending.getSmsStatus() == SmsStatus.PENDING) {
-                            if (pending.merchant.isNotBlank() && prefsManager.isUserLearningEnabled() && com.example.billing.BillingManager.isProUser(appContext)) {
+                            if (pending.merchant.isNotBlank() && prefsManager.isUserLearningEnabled()) {
                                 UserCategoryLearner.getInstance(appContext).learn(pending.merchant, pending.suggestedCategory)
                             }
                             val description = buildString {
@@ -82,8 +90,6 @@ class SmsActionReceiver : BroadcastReceiver() {
                                 }
                             }
 
-                            // ⭐ اصلاح: چک تکراری حذف شد (قبلاً هنگام دریافت پیامک انجام شده)
-                            // حالا مستقیماً تراکنش ثبت می‌شود
                             val transaction = Transaction(
                                 amount = pending.amount,
                                 category = SmartCategoryMatcher.toCanonicalKisehCategory(pending.suggestedCategory),
