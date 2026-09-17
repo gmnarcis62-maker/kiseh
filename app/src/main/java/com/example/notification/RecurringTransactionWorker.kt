@@ -19,11 +19,18 @@ import com.example.data.RecurrencePeriod
 import com.example.data.RecurringTransactionRepository
 import com.example.data.Transaction
 import com.example.ui.util.PersianUtils
+import java.util.Calendar
 
 class RecurringTransactionWorker(
     context: Context,
     params: WorkerParameters
 ) : CoroutineWorker(context, params) {
+
+    companion object {
+        private const val PREFS_NAME = "recurring_worker_prefs"
+        private const val KEY_LAST_UPCOMING_NOTIFY = "last_upcoming_notify_day"
+        private const val MAX_CATCH_UP = 60  // حداکثر تعداد ثبت جامانده در یک اجرا
+    }
 
     override suspend fun doWork(): Result {
         val database = AppDatabase.getDatabase(applicationContext)
@@ -32,64 +39,113 @@ class RecurringTransactionWorker(
 
         val now = System.currentTimeMillis()
 
-        // 1. پردازش و ثبت خودکار تراکنش‌های سررسید شده
+        // ============ ۱. پردازش و ثبت خودکار تراکنش‌های سررسید شده (با پشتیبانی از جامانده‌ها) ============
         val dueTransactions = recurringDao.getDueTransactions(now)
-        var autoRegisteredCount = 0
 
         for (recurring in dueTransactions) {
-            // ایجاد رکورد واقعی در جدول تراکنش‌ها
-            val description = if (recurring.note.isNotBlank()) {
-                "${recurring.title} (${recurring.note}) - ثبت خودکار دوره‌ای"
-            } else {
-                "${recurring.title} - ثبت خودکار دوره‌ای"
+            var currentExecution = recurring.nextExecutionDate
+            var lastExecuted = currentExecution
+            var caught = 0
+            var stillActive = true
+
+            // ثبت تمام سررسیدهای جامانده
+            while (currentExecution <= now && stillActive && caught < MAX_CATCH_UP) {
+                val description = buildString {
+                    append(recurring.title)
+                    if (recurring.note.isNotBlank()) {
+                        append(" (")
+                        append(recurring.note)
+                        append(")")
+                    }
+                    append(" - ثبت خودکار دوره‌ای")
+                }
+
+                val newTx = Transaction(
+                    amount = recurring.amount,
+                    category = recurring.category,
+                    description = description,
+                    date = currentExecution,  // ← تاریخ واقعی سررسید، نه الان
+                    isIncome = recurring.isIncome
+                )
+                transactionDao.insert(newTx)
+                lastExecuted = currentExecution
+                caught++
+
+                val nextDate = RecurringTransactionRepository.calculateNextDate(
+                    currentExecution,
+                    recurring.recurrencePeriod
+                )
+
+                if (recurring.endDate != null && nextDate > recurring.endDate) {
+                    stillActive = false
+                    currentExecution = nextDate
+                    break
+                }
+
+                currentExecution = nextDate
             }
 
-            val newTx = Transaction(
-                amount = recurring.amount,
-                category = recurring.category,
-                description = description,
-                date = now,
-                isIncome = recurring.isIncome
-            )
-            transactionDao.insert(newTx)
-
-            // محاسبه موعد بعدی
-            val nextDate = RecurringTransactionRepository.calculateNextDate(
-                recurring.nextExecutionDate,
-                recurring.recurrencePeriod
-            )
-
-            // بررسی رسیدن به تاریخ پایان
-            val stillActive = recurring.endDate == null || nextDate <= recurring.endDate
+            // اگر بیش از حد مجاز جامانده بود، از ادامه صرف‌نظر کن
+            if (caught >= MAX_CATCH_UP && currentExecution <= now) {
+                currentExecution = RecurringTransactionRepository.calculateNextDate(
+                    now,
+                    recurring.recurrencePeriod
+                )
+            }
 
             recurringDao.updateExecutionDates(
                 id = recurring.id,
-                nextDate = nextDate,
-                lastExecuted = now
+                nextDate = currentExecution,
+                lastExecuted = lastExecuted
             )
 
             if (!stillActive) {
                 recurringDao.setActiveState(recurring.id, false)
             }
 
-            autoRegisteredCount++
-            showAutoRegisteredNotification(recurring)
+            if (caught > 0) {
+                showAutoRegisteredNotification(recurring, caught)
+            }
         }
 
-        // 2. بررسی و ارسال اعلان برای تراکنش‌های نزدیک به سررسید (طی ۲۴ تا ۴۸ ساعت آینده)
-        val upcomingThreshold = now + (2L * 24 * 60 * 60 * 1000)
-        val upcomingList = recurringDao.getUpcomingDueTransactions(now, upcomingThreshold)
+        // ============ ۲. بررسی و ارسال اعلان سررسید نزدیک (فقط یک بار در روز) ============
+        val prefs = applicationContext.getSharedPreferences(PREFS_NAME, Context.MODE_PRIVATE)
+        val lastNotifyDay = prefs.getLong(KEY_LAST_UPCOMING_NOTIFY, 0L)
+        val todayStart = getTodayStartMillis()
 
-        for (upcoming in upcomingList) {
-            showUpcomingReminderNotification(upcoming)
+        if (lastNotifyDay < todayStart) {
+            val upcomingThreshold = now + (2L * 24 * 60 * 60 * 1000)
+            val upcomingList = recurringDao.getUpcomingDueTransactions(now, upcomingThreshold)
+
+            for (upcoming in upcomingList) {
+                showUpcomingReminderNotification(upcoming)
+            }
+
+            prefs.edit().putLong(KEY_LAST_UPCOMING_NOTIFY, now).apply()
         }
 
         return Result.success()
     }
 
-    private fun showAutoRegisteredNotification(recurring: com.example.data.RecurringTransaction) {
+    private fun getTodayStartMillis(): Long {
+        val cal = Calendar.getInstance()
+        cal.set(Calendar.HOUR_OF_DAY, 0)
+        cal.set(Calendar.MINUTE, 0)
+        cal.set(Calendar.SECOND, 0)
+        cal.set(Calendar.MILLISECOND, 0)
+        return cal.timeInMillis
+    }
+
+    private fun showAutoRegisteredNotification(
+        recurring: com.example.data.RecurringTransaction,
+        count: Int
+    ) {
         val channelId = "recurring_transactions_channel"
-        createNotificationChannel(channelId, "تراکنش‌های دوره‌ای", "اعلان‌های ثبت خودکار و سررسید دوره‌ای")
+        createNotificationChannel(
+            channelId,
+            "تراکنش‌های دوره‌ای",
+            "اعلان‌های ثبت خودکار و سررسید دوره‌ای"
+        )
 
         val intent = Intent(applicationContext, MainActivity::class.java).apply {
             flags = Intent.FLAG_ACTIVITY_NEW_TASK or Intent.FLAG_ACTIVITY_CLEAR_TASK
@@ -103,13 +159,16 @@ class RecurringTransactionWorker(
         )
 
         val typeTitle = if (recurring.isIncome) "درآمد دوره‌ای" else "هزینه دوره‌ای"
+        val countText = if (count > 1) " ($count بار)" else ""
+
         val notification = NotificationCompat.Builder(applicationContext, channelId)
             .setSmallIcon(android.R.drawable.stat_notify_sync)
-            .setContentTitle("✅ ثبت خودکار $typeTitle")
+            .setContentTitle("✅ ثبت خودکار $typeTitle$countText")
             .setContentText("«${recurring.title}» به مبلغ ${PersianUtils.formatCurrencyToman(recurring.amount)} ثبت شد.")
             .setPriority(NotificationCompat.PRIORITY_DEFAULT)
             .setContentIntent(pendingIntent)
             .setAutoCancel(true)
+            .setOnlyAlertOnce(true)
             .build()
 
         if (ActivityCompat.checkSelfPermission(
@@ -117,13 +176,18 @@ class RecurringTransactionWorker(
                 Manifest.permission.POST_NOTIFICATIONS
             ) == PackageManager.PERMISSION_GRANTED
         ) {
-            NotificationManagerCompat.from(applicationContext).notify((recurring.id + 20000).toInt(), notification)
+            NotificationManagerCompat.from(applicationContext)
+                .notify((recurring.id + 20000).toInt(), notification)
         }
     }
 
     private fun showUpcomingReminderNotification(upcoming: com.example.data.RecurringTransaction) {
         val channelId = "recurring_transactions_channel"
-        createNotificationChannel(channelId, "تراکنش‌های دوره‌ای", "اعلان‌های ثبت خودکار و سررسید دوره‌ای")
+        createNotificationChannel(
+            channelId,
+            "تراکنش‌های دوره‌ای",
+            "اعلان‌های ثبت خودکار و سررسید دوره‌ای"
+        )
 
         val intent = Intent(applicationContext, MainActivity::class.java).apply {
             flags = Intent.FLAG_ACTIVITY_NEW_TASK or Intent.FLAG_ACTIVITY_CLEAR_TASK
@@ -143,6 +207,7 @@ class RecurringTransactionWorker(
             .setPriority(NotificationCompat.PRIORITY_HIGH)
             .setContentIntent(pendingIntent)
             .setAutoCancel(true)
+            .setOnlyAlertOnce(true)
             .build()
 
         if (ActivityCompat.checkSelfPermission(
@@ -150,7 +215,8 @@ class RecurringTransactionWorker(
                 Manifest.permission.POST_NOTIFICATIONS
             ) == PackageManager.PERMISSION_GRANTED
         ) {
-            NotificationManagerCompat.from(applicationContext).notify((upcoming.id + 30000).toInt(), notification)
+            NotificationManagerCompat.from(applicationContext)
+                .notify((upcoming.id + 30000).toInt(), notification)
         }
     }
 

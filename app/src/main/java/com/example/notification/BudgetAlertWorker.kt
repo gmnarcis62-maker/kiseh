@@ -24,10 +24,16 @@ class BudgetAlertWorker(
     params: WorkerParameters
 ) : CoroutineWorker(context, params) {
 
+    companion object {
+        private const val PREFS_NAME = "budget_alert_prefs"
+        private const val KEY_LAST_ALERT_TIME = "last_alert_time"
+        private const val MIN_HOURS_BETWEEN_ALERTS = 24L
+    }
+
     override suspend fun doWork(): Result {
         val dao = AppDatabase.getDatabase(applicationContext).transactionDao()
 
-        // محاسبه شروع ماه
+        // محاسبه شروع ماه میلادی
         val calendar = Calendar.getInstance()
         calendar.set(Calendar.DAY_OF_MONTH, 1)
         calendar.set(Calendar.HOUR_OF_DAY, 0)
@@ -44,14 +50,24 @@ class BudgetAlertWorker(
         val prefs = applicationContext.getSharedPreferences("kiseh_prefs", Context.MODE_PRIVATE)
         val budgetLimit = prefs.getLong("budget_limit", 0)
 
-        // اگه از بودجه رد شده
+        // اگر از بودجه عبور کرده
         if (budgetLimit > 0 && totalSpent > budgetLimit) {
-            val overBudget = totalSpent - budgetLimit
 
-            // محاسبه چند درصد از بودجه رد شده
+            // ⭐ جلوگیری از اعلان تکراری: فقط یک بار در ۲۴ ساعت
+            val alertPrefs = applicationContext.getSharedPreferences(PREFS_NAME, Context.MODE_PRIVATE)
+            val lastAlertTime = alertPrefs.getLong(KEY_LAST_ALERT_TIME, 0L)
+            val hoursSinceLast = (System.currentTimeMillis() - lastAlertTime) / (60 * 60 * 1000)
+
+            if (hoursSinceLast < MIN_HOURS_BETWEEN_ALERTS) {
+                // قبلاً در ۲۴ ساعت گذشته اعلان داده شده
+                return Result.success()
+            }
+
+            val overBudget = totalSpent - budgetLimit
             val percentOver = ((overBudget.toFloat() / budgetLimit) * 100).toInt()
 
             showBudgetAlert(overBudget, percentOver)
+            alertPrefs.edit().putLong(KEY_LAST_ALERT_TIME, System.currentTimeMillis()).apply()
         }
 
         return Result.success()
@@ -61,7 +77,6 @@ class BudgetAlertWorker(
         val channelId = "budget_alerts"
         createNotificationChannel(channelId)
 
-        // ساخت Intent برای باز کردن اپ
         val intent = Intent(applicationContext, MainActivity::class.java).apply {
             flags = Intent.FLAG_ACTIVITY_NEW_TASK or Intent.FLAG_ACTIVITY_CLEAR_TASK
         }
