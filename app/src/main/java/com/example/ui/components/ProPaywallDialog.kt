@@ -63,6 +63,7 @@ import com.example.billing.BillingManager
 import com.example.ui.theme.EmeraldDark
 import com.example.ui.theme.EmeraldPrimary
 import com.example.ui.theme.GoldAccent
+import kotlinx.coroutines.delay
 
 private fun Context.findActivity(): Activity? {
     var ctx = this
@@ -85,7 +86,16 @@ fun ProPaywallDialog(
     var isRestoring by remember { mutableStateOf(false) }
 
     LaunchedEffect(Unit) {
-        BillingManager.querySkuDetails(context)
+        // ۱. اطمینان از تلاش برای اتصال به سرویس مایکت
+        BillingManager.init(context)
+
+        // ۲. تلاش مکرر برای دریافت قیمت (تا ۱۵ بار، هر ۱ ثانیه)
+        var attempts = 0
+        while (attempts < 15 && BillingManager.skuPriceState.value.isNullOrBlank()) {
+            delay(1000L)
+            BillingManager.querySkuDetails(context)
+            attempts++
+        }
     }
 
     CompositionLocalProvider(LocalLayoutDirection provides LayoutDirection.Rtl) {

@@ -13,6 +13,7 @@ import android.widget.Toast
 import com.android.vending.billing.IInAppBillingService
 import kotlinx.coroutines.CoroutineScope
 import kotlinx.coroutines.Dispatchers
+import kotlinx.coroutines.delay
 import kotlinx.coroutines.flow.MutableStateFlow
 import kotlinx.coroutines.flow.StateFlow
 import kotlinx.coroutines.flow.asStateFlow
@@ -29,20 +30,17 @@ data class FreeVoiceUsage(
 )
 
 /**
- * مدیریت پرداخت درون‌برنامه‌ای مایکت (Myket In-App Billing) و فعال‌سازی اشتراک دائم VIP در اپلیکیشن کیسه.
- * کاملاً امن، مقاوم در برابر عدم وجود مایکت روی دستگاه، تایید امضای RSA و ذخیره‌سازی وضعیت در DataStore.
+ * مدیریت پرداخت درون‌برنامه‌ای مایکت (Myket In-App Billing) و فعال‌سازی اشتراک دائم VIP.
  */
 object BillingManager {
 
     private const val TAG = "BillingManager"
 
-    // کلید عمومی رسمی RSA برنامه در پنل مایکت
     const val MYKET_PUBLIC_KEY = "MIGfMA0GCSqGSIb3DQEBAQUAA4GNADCBiQKBgQChuEJCVjyXbvgOF74J3Dzbo86482Q+HI7UFFX1odEhqQ4qBO/62dEtjBvMzxUe8rZeVEpxJeATTx95+FIZJPiogXVCYhWwXokrSYO0F67wgTivoapyUUIevzZtZhi6JTEQebIPNR2J8qIRPzzC09FOVylhNobJGqXXcet1fzlrOQIDAQAB"
 
     const val MYKET_PACKAGE = "ir.mservices.market"
     const val MYKET_BILLING_ACTION = "ir.mservices.market.InAppBillingService.BIND"
 
-    // شناسه محصول رسمی VIP دائم در مایکت
     const val SKU_PRO_LIFETIME = "kiseh_pro_lifetime"
     const val SKU_VIP_LIFETIME = "kiseh_pro_lifetime"
     val ALL_VIP_SKUS = listOf(SKU_PRO_LIFETIME)
@@ -79,12 +77,16 @@ object BillingManager {
         override fun onServiceConnected(name: ComponentName?, service: IBinder?) {
             try {
                 mService = IInAppBillingService.Stub.asInterface(service)
-                Log.d(TAG, "Billing Connect Result: true (Connected to Myket Billing Service: ${name?.packageName})")
+                Log.d(TAG, "Billing Connect Result: true (Connected to Myket: ${name?.packageName})")
                 appContext?.let { ctx ->
-                    querySkuDetails(ctx)
+                    // تاخیر کوتاه تا سرویس کاملاً آماده شود
+                    CoroutineScope(Dispatchers.IO).launch {
+                        delay(800)
+                        querySkuDetailsInternal(ctx, attempt = 1, maxAttempts = 5, onResult = { _, _ -> })
+                    }
                 }
             } catch (t: Throwable) {
-                Log.e(TAG, "Billing Connect Result: false (Error in onServiceConnected)", t)
+                Log.e(TAG, "Error in onServiceConnected", t)
                 mService = null
             }
         }
@@ -93,20 +95,16 @@ object BillingManager {
             mService = null
             isBound = false
             connectedStorePackage = null
-            Log.d(TAG, "Billing Connect Result: false (Disconnected from Billing Service)")
+            Log.d(TAG, "Billing Disconnected")
         }
     }
 
-    /**
-     * تنظیم و اتصال به سرویس پرداخت مایکت (Myket In-App Billing)
-     */
     fun init(context: Context) {
         try {
             val applicationContext = context.applicationContext
             appContext = applicationContext
             val prefs = applicationContext.getSharedPreferences(PREFS_NAME, Context.MODE_PRIVATE)
 
-            // بررسی اصالت VIP: اگر از استورهای غیر مایکت باقی مانده باشد پاکسازی شود
             val store = prefs.getString(KEY_PURCHASE_STORE, null)
             val isPro = prefs.getBoolean(KEY_IS_PRO, false)
 
@@ -128,7 +126,6 @@ object BillingManager {
                 _isProState.value = isPro
             }
 
-            // همگام‌سازی از DataStore در پس‌زمینه
             CoroutineScope(Dispatchers.IO).launch {
                 try {
                     val vipInfo = VipPreferencesManager(applicationContext).getVipInfo()
@@ -140,12 +137,10 @@ object BillingManager {
             }
 
             if (mService == null && !isBound) {
-                Log.d(TAG, "Billing Connect Start: pkg=$MYKET_PACKAGE, action=$MYKET_BILLING_ACTION")
+                Log.d(TAG, "Billing Connect Start: pkg=$MYKET_PACKAGE")
                 CoroutineScope(Dispatchers.IO).launch {
                     try {
                         val pm = applicationContext.packageManager
-
-                        // انحصاراً سرویس پرداخت مایکت
                         val myketIntent = Intent(MYKET_BILLING_ACTION).apply {
                             setPackage(MYKET_PACKAGE)
                         }
@@ -154,10 +149,10 @@ object BillingManager {
                             connectedStorePackage = MYKET_PACKAGE
                             Log.d(TAG, "Billing Connect Result: bindService initiated=$isBound")
                         } else {
-                            Log.d(TAG, "Billing Connect Result: false (Myket app not installed on device)")
+                            Log.e(TAG, "Billing Connect Result: false (Myket app not installed)")
                         }
                     } catch (t: Throwable) {
-                        Log.e(TAG, "Billing Connect Result: false (Error binding to billing service)", t)
+                        Log.e(TAG, "Billing Connect Result: false (error binding)", t)
                     }
                 }
             } else if (mService != null) {
@@ -169,34 +164,68 @@ object BillingManager {
     }
 
     /**
-     * استعلام مشخصات و قیمت محصول از مایکت (SKU Query)
+     * استعلام قیمت (با ۳ تلاش)
      */
     fun querySkuDetails(context: Context, onResult: (Boolean, String?) -> Unit = { _, _ -> }) {
-        val service = mService
         val appCtx = context.applicationContext
-        if (service == null) {
-            Log.d(TAG, "SKU Query Start: Service not bound yet, returning cached or null")
+        if (mService == null) {
+            Log.w(TAG, "SKU Query: service null, returning cached")
             onResult(false, _skuPriceState.value)
             return
         }
+        querySkuDetailsInternal(appCtx, attempt = 1, maxAttempts = 3, onResult = onResult)
+    }
 
+    /**
+     * متد عمومی برای تلاش مجدد از سمت UI
+     */
+    fun retrySkuQuery(context: Context, onResult: (Boolean, String?) -> Unit = { _, _ -> }) {
+        val appCtx = context.applicationContext
+        if (mService == null) {
+            Log.d(TAG, "Retry: service not bound, calling init")
+            init(appCtx)
+            CoroutineScope(Dispatchers.Main).launch {
+                delay(2000)
+                querySkuDetails(appCtx, onResult)
+            }
+        } else {
+            querySkuDetails(appCtx, onResult)
+        }
+    }
+
+    private fun querySkuDetailsInternal(
+        appCtx: Context,
+        attempt: Int,
+        maxAttempts: Int,
+        onResult: (Boolean, String?) -> Unit
+    ) {
         CoroutineScope(Dispatchers.IO).launch {
             try {
-                Log.d(TAG, "SKU Query Start: sku=$SKU_PRO_LIFETIME, pkg=${appCtx.packageName}")
+                val service = mService
+                if (service == null) {
+                    Log.w(TAG, "SKU Query internal: service null")
+                    withContext(Dispatchers.Main) { onResult(false, _skuPriceState.value) }
+                    return@launch
+                }
+
+                Log.d(TAG, "SKU Query Start (attempt $attempt/$maxAttempts): sku=$SKU_PRO_LIFETIME")
                 val skuBundle = Bundle()
                 skuBundle.putStringArrayList("ITEM_ID_LIST", arrayListOf(SKU_PRO_LIFETIME))
 
                 val skuDetailsBundle = service.getSkuDetails(3, appCtx.packageName, "inapp", skuBundle)
                 if (skuDetailsBundle == null) {
-                    Log.e(TAG, "SKU Query Result: bundle is null")
-                    withContext(Dispatchers.Main) {
-                        onResult(false, _skuPriceState.value)
+                    Log.e(TAG, "SKU Query: bundle null (attempt $attempt)")
+                    if (attempt < maxAttempts) {
+                        delay(2000L)
+                        querySkuDetailsInternal(appCtx, attempt + 1, maxAttempts, onResult)
+                    } else {
+                        withContext(Dispatchers.Main) { onResult(false, null) }
                     }
                     return@launch
                 }
 
                 val responseCode = skuDetailsBundle.getInt("RESPONSE_CODE", -1)
-                Log.d(TAG, "SKU Query Result: responseCode=$responseCode")
+                Log.d(TAG, "SKU Query Result: responseCode=$responseCode (attempt $attempt)")
 
                 if (responseCode == 0) {
                     val detailsList = skuDetailsBundle.getStringArrayList("DETAILS_LIST")
@@ -210,48 +239,48 @@ object BillingManager {
                                     val title = json.optString("title")
                                     val formattedPrice = formatPriceDisplay(rawPrice)
                                     _skuPriceState.value = formattedPrice
-                                    Log.d(TAG, "SKU Query Result: sku=$sku, title=$title, price=$formattedPrice")
-                                    withContext(Dispatchers.Main) {
-                                        onResult(true, formattedPrice)
-                                    }
+                                    Log.d(TAG, "SKU SUCCESS: price=$formattedPrice, title=$title")
+                                    withContext(Dispatchers.Main) { onResult(true, formattedPrice) }
                                     return@launch
                                 }
                             } catch (e: Throwable) {
-                                Log.e(TAG, "Error parsing SKU detail JSON", e)
+                                Log.e(TAG, "Error parsing SKU JSON", e)
                             }
                         }
+                        Log.w(TAG, "SKU: details list present but no match for $SKU_PRO_LIFETIME")
+                    } else {
+                        Log.w(TAG, "SKU: responseCode=0 but DETAILS_LIST empty")
                     }
                 }
-                withContext(Dispatchers.Main) {
-                    onResult(false, _skuPriceState.value)
+
+                if (attempt < maxAttempts) {
+                    delay(2000L)
+                    querySkuDetailsInternal(appCtx, attempt + 1, maxAttempts, onResult)
+                } else {
+                    withContext(Dispatchers.Main) { onResult(false, _skuPriceState.value) }
                 }
             } catch (t: Throwable) {
-                Log.e(TAG, "SKU Query Result: error", t)
-                withContext(Dispatchers.Main) {
-                    onResult(false, _skuPriceState.value)
+                Log.e(TAG, "SKU Query error (attempt $attempt)", t)
+                if (attempt < maxAttempts) {
+                    delay(2000L)
+                    querySkuDetailsInternal(appCtx, attempt + 1, maxAttempts, onResult)
+                } else {
+                    withContext(Dispatchers.Main) { onResult(false, _skuPriceState.value) }
                 }
             }
         }
     }
 
-    /**
-     * تنظیم قیمت برای محیط تست
-     */
     fun setSkuPriceForTesting(price: String?) {
         _skuPriceState.value = price
     }
 
-    /**
-     * نرمال‌سازی و قالب‌بندی رشته قیمت دریافتی از مایکت به فارسی
-     */
     fun formatPriceDisplay(rawPrice: String?): String {
         if (rawPrice.isNullOrBlank()) return ""
         val trimmed = rawPrice.trim()
-        // اگر قبلاً حاوی کلمه تومان یا ریال است
         if (trimmed.contains("تومان") || trimmed.contains("تومن")) {
             return toPersianDigits(trimmed)
         }
-        // استخراج عدد
         val digitsOnly = trimmed.replace(Regex("[^0-9]"), "")
         if (digitsOnly.isNotEmpty()) {
             try {
@@ -272,9 +301,6 @@ object BillingManager {
         return result
     }
 
-    /**
-     * ترجمه کدهای خطای رسمی IInAppBillingService مایکت به پیام‌های شفاف و تفکیک‌شده برای کاربر
-     */
     fun getBillingErrorMessage(responseCode: Int): String {
         return when (responseCode) {
             1 -> "پرداخت توسط کاربر لغو شد."
@@ -288,9 +314,6 @@ object BillingManager {
         }
     }
 
-    /**
-     * بازیابی خریدهای قبلی کاربر (Restore Purchases)
-     */
     fun restorePurchases(context: Context, onResult: (Boolean, String) -> Unit = { _, _ -> }) {
         val appCtx = context.applicationContext
         val service = mService
@@ -303,22 +326,15 @@ object BillingManager {
 
         CoroutineScope(Dispatchers.IO).launch {
             try {
-                Log.d(TAG, "Restore Purchases Started")
                 val purchasesBundle: Bundle? = service.getPurchases(3, appCtx.packageName, "inapp", null)
                 if (purchasesBundle == null) {
-                    withContext(Dispatchers.Main) {
-                        onResult(false, "پاسخی از مایکت دریافت نشد.")
-                    }
+                    withContext(Dispatchers.Main) { onResult(false, "پاسخی از مایکت دریافت نشد.") }
                     return@launch
                 }
 
                 val responseCode = purchasesBundle.getInt("RESPONSE_CODE", -1)
-                Log.d(TAG, "Restore Purchases Response Code: $responseCode")
                 if (responseCode != 0) {
-                    val errorMsg = getBillingErrorMessage(responseCode)
-                    withContext(Dispatchers.Main) {
-                        onResult(false, errorMsg)
-                    }
+                    withContext(Dispatchers.Main) { onResult(false, getBillingErrorMessage(responseCode)) }
                     return@launch
                 }
 
@@ -338,17 +354,9 @@ object BillingManager {
                         val purchaseTime = json.optLong("purchaseTime", System.currentTimeMillis())
                         val signature = signatureList?.getOrNull(index)
 
-                        Log.d(TAG, "Purchase Token: $token")
-                        Log.d(TAG, "Purchase State: $state")
-                        Log.d(TAG, "Verify Started: sku=$sku, signature=$signature")
-
                         val isVerified = if (!signature.isNullOrBlank() && MYKET_PUBLIC_KEY.isNotBlank()) {
                             verifyPurchase(purchaseJson, signature, MYKET_PUBLIC_KEY)
-                        } else {
-                            true
-                        }
-
-                        Log.d(TAG, "Verify Result: $isVerified")
+                        } else true
 
                         if ((sku in ALL_VIP_SKUS) && state == 0 && isVerified) {
                             restored = true
@@ -357,35 +365,29 @@ object BillingManager {
                             restoredProduct = sku
                         }
                     } catch (e: Throwable) {
-                        Log.e(TAG, "Error parsing restore purchase JSON", e)
+                        Log.e(TAG, "Error parsing restore JSON", e)
                     }
                 }
 
                 if (restored) {
                     setVipUserInternal(appCtx, true, restoredToken, restoredDate, restoredProduct)
-                    Log.d(TAG, "VIP Activated: token=$restoredToken, time=$restoredDate, product=$restoredProduct")
                     withContext(Dispatchers.Main) {
                         Toast.makeText(appCtx, "🎉 خرید VIP شما با موفقیت بازیابی شد.", Toast.LENGTH_LONG).show()
                         onResult(true, "خرید شما با موفقیت بازیابی شد.")
                     }
                 } else {
                     withContext(Dispatchers.Main) {
-                        Toast.makeText(appCtx, "خریدی برای این حساب در مایکت یافت نشد.", Toast.LENGTH_LONG).show()
-                        onResult(false, "خریدی برای این حساب در مایکت یافت نشد.")
+                        Toast.makeText(appCtx, "خریدی برای این حساب یافت نشد.", Toast.LENGTH_LONG).show()
+                        onResult(false, "خریدی برای این حساب یافت نشد.")
                     }
                 }
             } catch (t: Throwable) {
                 Log.e(TAG, "Error checking purchases", t)
-                withContext(Dispatchers.Main) {
-                    onResult(false, "خطا در اتصال به مایکت: ${t.message}")
-                }
+                withContext(Dispatchers.Main) { onResult(false, "خطا: ${t.message}") }
             }
         }
     }
 
-    /**
-     * بررسی خودکار خریدهای قبلی در پس‌زمینه
-     */
     fun checkPurchases(context: Context) {
         val service = mService ?: return
         val appCtx = context.applicationContext
@@ -408,9 +410,7 @@ object BillingManager {
                             val signature = signatureList?.getOrNull(index)
                             val isVerified = if (!signature.isNullOrBlank() && MYKET_PUBLIC_KEY.isNotBlank()) {
                                 verifyPurchase(purchaseJson, signature, MYKET_PUBLIC_KEY)
-                            } else {
-                                true
-                            }
+                            } else true
 
                             if ((sku in ALL_VIP_SKUS) && state == 0 && isVerified) {
                                 isVip = true
@@ -424,7 +424,6 @@ object BillingManager {
                     }
                     if (isVip) {
                         setVipUserInternal(appCtx, true, token, date, product)
-                        Log.d(TAG, "VIP Activated (background check): product=$product")
                     }
                 }
             } catch (t: Throwable) {
@@ -433,24 +432,18 @@ object BillingManager {
         }
     }
 
-    /**
-     * شروع فرایند خرید VIP مایکت با لاگ‌گذاری کامل و مدیریت دقیق خطاها
-     */
     fun purchasePro(activity: Activity, onSuccess: () -> Unit = {}, onFailure: (String) -> Unit = {}) {
         purchaseVip(activity, onSuccess, onFailure)
     }
 
     fun purchaseVip(activity: Activity, onSuccess: () -> Unit = {}, onFailure: (String) -> Unit = {}) {
         try {
-            Log.d(TAG, "Purchase Start")
-            Log.d(TAG, "Purchase SKU: $SKU_PRO_LIFETIME")
             init(activity)
             val service = mService
 
             if (service == null) {
                 val errorMsg = "ارتباط با سرور مایکت برقرار نشد. لطفاً اتصال اینترنت خود را بررسی کنید."
                 Toast.makeText(activity, errorMsg, Toast.LENGTH_LONG).show()
-                Log.e(TAG, "Purchase Response Code: -1 (Service null)")
                 onFailure("Myket billing service not available")
                 return
             }
@@ -459,17 +452,12 @@ object BillingManager {
             val buyIntentBundle = service.getBuyIntent(3, activity.packageName, SKU_PRO_LIFETIME, "inapp", developerPayload)
 
             if (buyIntentBundle == null) {
-                val errorMsg = "پاسخی از سرور مایکت دریافت نشد."
-                Toast.makeText(activity, errorMsg, Toast.LENGTH_SHORT).show()
-                Log.e(TAG, "Purchase Response Code: -1 (buyIntentBundle is null)")
+                Toast.makeText(activity, "پاسخی از سرور مایکت دریافت نشد.", Toast.LENGTH_SHORT).show()
                 onFailure("buyIntentBundle is null")
                 return
             }
 
             val responseCode = buyIntentBundle.getInt("RESPONSE_CODE", -1)
-            val responseMsg = getBillingErrorMessage(responseCode)
-            Log.d(TAG, "Purchase Response Code: $responseCode")
-            Log.d(TAG, "Purchase Response Message: $responseMsg")
 
             if (responseCode == 0) {
                 @Suppress("DEPRECATION")
@@ -478,18 +466,14 @@ object BillingManager {
                     activity.startIntentSenderForResult(
                         pendingIntent.intentSender,
                         PURCHASE_REQUEST_CODE,
-                        Intent(),
-                        0, 0, 0
+                        Intent(), 0, 0, 0
                     )
                 } else {
-                    val errorMsg = "خطا در ایجاد پیوند پرداخت مایکت."
-                    Toast.makeText(activity, errorMsg, Toast.LENGTH_SHORT).show()
                     onFailure("PendingIntent is null")
                 }
-            } else if (responseCode == 7) { // ITEM_ALREADY_OWNED
+            } else if (responseCode == 7) {
                 setVipUserInternal(activity, true, null, System.currentTimeMillis(), SKU_PRO_LIFETIME)
-                Log.d(TAG, "VIP Activated (Item already owned)")
-                Toast.makeText(activity, "🎉 شما قبلاً این اشتراک را در مایکت خریداری کرده‌اید. دسترسی VIP فعال شد.", Toast.LENGTH_LONG).show()
+                Toast.makeText(activity, "🎉 شما قبلاً این اشتراک را خریداری کرده‌اید.", Toast.LENGTH_LONG).show()
                 onSuccess()
             } else {
                 val errorMsg = getBillingErrorMessage(responseCode)
@@ -498,8 +482,7 @@ object BillingManager {
             }
         } catch (t: Throwable) {
             Log.e(TAG, "Error launching purchase", t)
-            val errorMsg = "امکان اتصال به درگاه مایکت میسر نشد: ${t.message}"
-            Toast.makeText(activity, errorMsg, Toast.LENGTH_SHORT).show()
+            Toast.makeText(activity, "امکان اتصال به درگاه مایکت میسر نشد: ${t.message}", Toast.LENGTH_SHORT).show()
             onFailure(t.message ?: "Error launching purchase")
         }
     }
@@ -521,9 +504,7 @@ object BillingManager {
         return try {
             val prefs = context.getSharedPreferences(PREFS_NAME, Context.MODE_PRIVATE)
             prefs.getBoolean(KEY_QUICK_VOICE_ENABLED, false)
-        } catch (_: Throwable) {
-            false
-        }
+        } catch (_: Throwable) { false }
     }
 
     fun setQuickVoiceNotificationEnabled(context: Context, enabled: Boolean) {
@@ -543,9 +524,7 @@ object BillingManager {
             val isPro = prefs.getBoolean(KEY_IS_PRO, false)
             _isProState.value = isPro
             isPro
-        } catch (_: Throwable) {
-            _isProState.value
-        }
+        } catch (_: Throwable) { _isProState.value }
     }
 
     fun setProUser(context: Context, isPro: Boolean) {
@@ -586,11 +565,6 @@ object BillingManager {
             editor.commit()
             _isProState.value = isVip
 
-            if (isVip) {
-                Log.d(TAG, "VIP Activated in internal state: product=$productId, token=$purchaseToken")
-            }
-
-            // ذخیره ماندگار در DataStore
             CoroutineScope(Dispatchers.IO).launch {
                 try {
                     VipPreferencesManager(context.applicationContext).saveVipStatus(
@@ -619,20 +593,12 @@ object BillingManager {
             val today = java.text.SimpleDateFormat("yyyy-MM-dd", java.util.Locale.US).format(java.util.Date())
             val lastDate = prefs.getString(KEY_VOICE_USAGE_DATE, "") ?: ""
             if (lastDate.isEmpty()) {
-                prefs.edit()
-                    .putString(KEY_VOICE_USAGE_DATE, today)
-                    .putInt(KEY_VOICE_USAGE_COUNT, 0)
-                    .apply()
+                prefs.edit().putString(KEY_VOICE_USAGE_DATE, today).putInt(KEY_VOICE_USAGE_COUNT, 0).apply()
                 return
             }
-            if (today < lastDate) {
-                return
-            }
+            if (today < lastDate) return
             if (lastDate != today) {
-                prefs.edit()
-                    .putString(KEY_VOICE_USAGE_DATE, today)
-                    .putInt(KEY_VOICE_USAGE_COUNT, 0)
-                    .apply()
+                prefs.edit().putString(KEY_VOICE_USAGE_DATE, today).putInt(KEY_VOICE_USAGE_COUNT, 0).apply()
             }
         } catch (t: Throwable) {
             Log.e(TAG, "Error resetting daily voice usage", t)
@@ -642,11 +608,8 @@ object BillingManager {
     fun getVoiceUsageCount(context: Context): Int {
         checkAndResetDailyUsage(context)
         return try {
-            val prefs = context.getSharedPreferences(PREFS_NAME, Context.MODE_PRIVATE)
-            prefs.getInt(KEY_VOICE_USAGE_COUNT, 0)
-        } catch (_: Throwable) {
-            0
-        }
+            context.getSharedPreferences(PREFS_NAME, Context.MODE_PRIVATE).getInt(KEY_VOICE_USAGE_COUNT, 0)
+        } catch (_: Throwable) { 0 }
     }
 
     fun getFreeVoiceUsage(context: Context): FreeVoiceUsage {
@@ -657,9 +620,7 @@ object BillingManager {
                 lastResetDate = prefs.getString(KEY_VOICE_USAGE_DATE, "") ?: "",
                 countToday = prefs.getInt(KEY_VOICE_USAGE_COUNT, 0)
             )
-        } catch (_: Throwable) {
-            FreeVoiceUsage(lastResetDate = "", countToday = 0)
-        }
+        } catch (_: Throwable) { FreeVoiceUsage("", 0) }
     }
 
     fun incrementVoiceUsage(context: Context) {
@@ -673,9 +634,7 @@ object BillingManager {
         }
     }
 
-    fun consumeVoiceTrial(context: Context) {
-        incrementVoiceUsage(context)
-    }
+    fun consumeVoiceTrial(context: Context) { incrementVoiceUsage(context) }
 
     fun canUseVoiceInput(context: Context): Boolean {
         if (isVipUser(context)) return true
@@ -692,18 +651,12 @@ object BillingManager {
         try {
             val prefs = context.getSharedPreferences(PREFS_NAME, Context.MODE_PRIVATE)
             val targetDate = date ?: java.text.SimpleDateFormat("yyyy-MM-dd", java.util.Locale.US).format(java.util.Date())
-            prefs.edit()
-                .putString(KEY_VOICE_USAGE_DATE, targetDate)
-                .putInt(KEY_VOICE_USAGE_COUNT, count)
-                .apply()
+            prefs.edit().putString(KEY_VOICE_USAGE_DATE, targetDate).putInt(KEY_VOICE_USAGE_COUNT, count).apply()
         } catch (t: Throwable) {
-            Log.e(TAG, "Error resetting voice usage for testing", t)
+            Log.e(TAG, "Error resetting voice usage", t)
         }
     }
 
-    /**
-     * تایید امضای خرید مایکت با کلید عمومی RSA
-     */
     fun verifyPurchase(signedData: String, signature: String?, publicKeyString: String = MYKET_PUBLIC_KEY): Boolean {
         if (publicKeyString.isBlank() || signature.isNullOrBlank()) return false
         return try {
