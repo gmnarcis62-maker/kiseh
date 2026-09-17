@@ -14,6 +14,7 @@ import java.util.Date
 import java.util.Locale
 import androidx.lifecycle.AndroidViewModel
 import androidx.lifecycle.viewModelScope
+import androidx.room.withTransaction
 import androidx.work.ExistingPeriodicWorkPolicy
 import androidx.work.OneTimeWorkRequestBuilder
 import androidx.work.PeriodicWorkRequestBuilder
@@ -48,12 +49,10 @@ import com.example.data.SavingsGoal
 import com.example.data.SavingsGoalRepository
 import com.example.data.PendingBankSms
 import com.example.data.PendingBankSmsRepository
-import com.example.backup.BackupMetadata
+import com.example.backup.BackupCryptoManager
 import com.example.backup.CloudBackupState
-import com.example.backup.GoogleAccountState
-import com.example.backup.FirebaseAuthManager
-import com.example.backup.FirebaseBackupRepository
 import com.example.backup.KisehBackupPayload
+import com.example.backup.AppPreferencesBackup
 import com.example.data.RecurringTransaction
 import com.example.data.RecurringTransactionRepository
 import com.example.data.CustomCategory
@@ -76,28 +75,19 @@ enum class PeriodFilter(val title: String) {
 
 class MainViewModel(application: Application) : AndroidViewModel(application) {
 
+    private val database: AppDatabase
     private val repository: TransactionRepository
     private val savingsGoalRepository: SavingsGoalRepository
     private val recurringTransactionRepository: RecurringTransactionRepository
     private val categoryRepository: CategoryRepository
     private val pendingBankSmsRepository: PendingBankSmsRepository
     private val securityManager: SecurityPreferencesManager
-    private val firebaseAuthManager: FirebaseAuthManager
-    private val firebaseBackupRepository: FirebaseBackupRepository
     private val userCategoryLearner: UserCategoryLearner = UserCategoryLearner.getInstance(application)
     private val analyzer = ExpenseAnalyzer()
 
-    // --- Cloud Backup & Restore State ---
-    private val _cloudBackupState = MutableStateFlow<CloudBackupState>(CloudBackupState.Idle)
-    val cloudBackupState: StateFlow<CloudBackupState> = _cloudBackupState.asStateFlow()
-
-    val googleAccountState: StateFlow<GoogleAccountState>
-
-    private val _lastBackupMetadata = MutableStateFlow<BackupMetadata?>(null)
-    val lastBackupMetadata: StateFlow<BackupMetadata?> = _lastBackupMetadata.asStateFlow()
-
-    private val _availableBackups = MutableStateFlow<List<BackupMetadata>>(emptyList())
-    val availableBackups: StateFlow<List<BackupMetadata>> = _availableBackups.asStateFlow()
+    // --- Local Backup State ---
+    private val _backupState = MutableStateFlow<CloudBackupState>(CloudBackupState.Idle)
+    val cloudBackupState: StateFlow<CloudBackupState> = _backupState.asStateFlow()
 
     // --- Security & App Lock State ---
     val isAppLockEnabled: StateFlow<Boolean>
@@ -134,7 +124,7 @@ class MainViewModel(application: Application) : AndroidViewModel(application) {
     val selectedPeriod: StateFlow<String> = _selectedPeriod.asStateFlow()
 
     init {
-        val database = AppDatabase.getDatabase(application)
+        database = AppDatabase.getDatabase(application)
         val dao = database.transactionDao()
         val goalsDao = database.savingsGoalDao()
         val recurringDao = database.recurringTransactionDao()
@@ -146,26 +136,6 @@ class MainViewModel(application: Application) : AndroidViewModel(application) {
         categoryRepository = CategoryRepository(customCatDao)
         pendingBankSmsRepository = PendingBankSmsRepository(pendingSmsDao)
         securityManager = SecurityPreferencesManager(application)
-
-        // ⭐ Firebase Auth & Backup
-        firebaseAuthManager = FirebaseAuthManager(application)
-        firebaseBackupRepository = FirebaseBackupRepository(
-            database = database,
-            transactionDao = dao,
-            savingsGoalDao = goalsDao,
-            recurringTransactionDao = recurringDao,
-            customCategoryDao = customCatDao,
-            authManager = firebaseAuthManager,
-            context = application
-        )
-
-        // StateFlow وضعیت حساب از FirebaseAuthManager
-        googleAccountState = firebaseAuthManager.accountState
-
-        // بارگذاری متادیتای آخرین بکاپ (اگر وجود داشته باشد)
-        viewModelScope.launch {
-            refreshBackupMetadata()
-        }
 
         isAppLockEnabled = securityManager.isAppLockEnabled
             .stateIn(viewModelScope, SharingStarted.Eagerly, false)
@@ -546,7 +516,7 @@ class MainViewModel(application: Application) : AndroidViewModel(application) {
         }
     }
 
-    // Savings Goals Functions (VIP exclusive)
+    // Savings Goals
     fun addSavingsGoal(
         title: String,
         targetAmount: Long,
@@ -559,10 +529,7 @@ class MainViewModel(application: Application) : AndroidViewModel(application) {
         viewModelScope.launch {
             val app = getApplication<Application>()
             val currentCount = savingsGoalRepository.allGoals.first().size
-            if (!FeatureUsageManager.canAddSavingsGoal(app, currentCount)) {
-                android.util.Log.d("MainViewModel", "Blocked addSavingsGoal: Free limit reached")
-                return@launch
-            }
+            if (!FeatureUsageManager.canAddSavingsGoal(app, currentCount)) return@launch
             val goal = SavingsGoal(
                 title = title.trim(),
                 targetAmount = targetAmount,
@@ -577,25 +544,19 @@ class MainViewModel(application: Application) : AndroidViewModel(application) {
     }
 
     fun updateSavingsGoal(goal: SavingsGoal) {
-        viewModelScope.launch {
-            savingsGoalRepository.update(goal)
-        }
+        viewModelScope.launch { savingsGoalRepository.update(goal) }
     }
 
     fun deleteSavingsGoal(goal: SavingsGoal) {
-        viewModelScope.launch {
-            savingsGoalRepository.delete(goal)
-        }
+        viewModelScope.launch { savingsGoalRepository.delete(goal) }
     }
 
     fun addDepositToGoal(goalId: Long, depositAmount: Long) {
         if (depositAmount <= 0) return
-        viewModelScope.launch {
-            savingsGoalRepository.addDeposit(goalId, depositAmount)
-        }
+        viewModelScope.launch { savingsGoalRepository.addDeposit(goalId, depositAmount) }
     }
 
-    // Recurring Transactions Management Functions (VIP exclusive)
+    // Recurring Transactions
     fun addRecurringTransaction(
         title: String,
         amount: Long,
@@ -609,10 +570,7 @@ class MainViewModel(application: Application) : AndroidViewModel(application) {
         viewModelScope.launch {
             val app = getApplication<Application>()
             val currentCount = recurringTransactionRepository.allRecurringTransactions.first().size
-            if (!FeatureUsageManager.canAddRecurringTransaction(app, currentCount)) {
-                android.util.Log.d("MainViewModel", "Blocked addRecurringTransaction: Free limit reached")
-                return@launch
-            }
+            if (!FeatureUsageManager.canAddRecurringTransaction(app, currentCount)) return@launch
             val item = RecurringTransaction(
                 title = title.trim(),
                 amount = amount,
@@ -627,7 +585,6 @@ class MainViewModel(application: Application) : AndroidViewModel(application) {
                 note = note.trim()
             )
             recurringTransactionRepository.insert(item)
-
             if (startDate <= System.currentTimeMillis()) {
                 triggerProcessRecurringTransactions()
             }
@@ -635,15 +592,11 @@ class MainViewModel(application: Application) : AndroidViewModel(application) {
     }
 
     fun updateRecurringTransaction(recurringTransaction: RecurringTransaction) {
-        viewModelScope.launch {
-            recurringTransactionRepository.update(recurringTransaction)
-        }
+        viewModelScope.launch { recurringTransactionRepository.update(recurringTransaction) }
     }
 
     fun deleteRecurringTransaction(recurringTransaction: RecurringTransaction) {
-        viewModelScope.launch {
-            recurringTransactionRepository.delete(recurringTransaction)
-        }
+        viewModelScope.launch { recurringTransactionRepository.delete(recurringTransaction) }
     }
 
     fun toggleRecurringTransactionActive(recurringTransaction: RecurringTransaction) {
@@ -651,10 +604,7 @@ class MainViewModel(application: Application) : AndroidViewModel(application) {
             val app = getApplication<Application>()
             if (!recurringTransaction.isActive && !BillingManager.isVipUser(app)) {
                 val currentActive = recurringTransactionRepository.allRecurringTransactions.first().count { it.isActive }
-                if (currentActive >= FeatureUsageManager.MAX_FREE_RECURRING_TRANSACTIONS) {
-                    android.util.Log.d("MainViewModel", "Blocked toggleRecurringTransactionActive: Free limit reached")
-                    return@launch
-                }
+                if (currentActive >= FeatureUsageManager.MAX_FREE_RECURRING_TRANSACTIONS) return@launch
             }
             val newState = !recurringTransaction.isActive
             recurringTransactionRepository.setActiveState(recurringTransaction.id, newState)
@@ -711,11 +661,7 @@ class MainViewModel(application: Application) : AndroidViewModel(application) {
                 context?.let { ctx ->
                     withContext(Dispatchers.Main) {
                         ctx.startActivity(chooserIntent)
-                        Toast.makeText(
-                            ctx,
-                            "فایل گزارش CSV ذخیره و آماده ارسال شد.",
-                            Toast.LENGTH_SHORT
-                        ).show()
+                        Toast.makeText(ctx, "فایل گزارش CSV ذخیره و آماده ارسال شد.", Toast.LENGTH_SHORT).show()
                     }
                 }
             }
@@ -759,11 +705,7 @@ class MainViewModel(application: Application) : AndroidViewModel(application) {
 
             context?.let { ctx ->
                 try {
-                    Toast.makeText(
-                        ctx,
-                        "فایل PDF گزارش در پوشه Kiseh حافظه گوشی ذخیره شد.",
-                        Toast.LENGTH_LONG
-                    ).show()
+                    Toast.makeText(ctx, "فایل PDF گزارش در پوشه Kiseh حافظه گوشی ذخیره شد.", Toast.LENGTH_LONG).show()
                     ctx.startActivity(chooserIntent)
                 } catch (_: Exception) {
                     getApplication<Application>().startActivity(chooserIntent)
@@ -817,7 +759,7 @@ class MainViewModel(application: Application) : AndroidViewModel(application) {
                     addFlags(Intent.FLAG_GRANT_READ_URI_PERMISSION)
                 }
 
-                Toast.makeText(context, "فایل CSV در پوشه My Kiseh backup ذخیره شد", Toast.LENGTH_LONG).show()
+                Toast.makeText(context, "فایل CSV ذخیره شد", Toast.LENGTH_LONG).show()
                 context.startActivity(chooserIntent)
             } catch (e: Exception) {
                 Toast.makeText(context, "خطا در خروجی CSV: ${e.message}", Toast.LENGTH_SHORT).show()
@@ -825,317 +767,161 @@ class MainViewModel(application: Application) : AndroidViewModel(application) {
         }
     }
 
-    fun exportCustomBackup(context: Context, userCustomName: String, isJson: Boolean) {
-        viewModelScope.launch(Dispatchers.IO) {
+    // =========================================================================
+    // Local Backup & Restore (SAF - کاربر محل ذخیره را انتخاب می‌کند)
+    // =========================================================================
+
+    /**
+     * ساخت بکاپ رمزنگاری‌شده و نوشتن آن در URI انتخاب‌شده توسط کاربر.
+     * کاربر از طریق پنجره SAF (Storage Access Framework) محل و نام فایل را انتخاب می‌کند.
+     */
+    fun createBackupToUri(uri: Uri) {
+        viewModelScope.launch {
+            _backupState.value = CloudBackupState.InProgress("در حال ساخت و رمزنگاری بکاپ...")
             try {
-                val rawName = userCustomName.trim().ifBlank { "پشتیبان_کیسه" }
-                val sanitizedName = rawName.replace(Regex("[^a-zA-Z0-9_آ-ی0-9\\s\\-]"), "_").replace("\\s+".toRegex(), "_")
-                val shamsiDateTime = PersianUtils.getShamsiDateTimeForFilename(System.currentTimeMillis())
-                val extension = if (isJson) "json" else "csv"
-                val fileName = "${sanitizedName}_${shamsiDateTime}.${extension}"
-
-                val transactions = allTransactions.value
-                val fileContent = if (isJson) {
-                    val jsonArray = JSONArray()
-                    transactions.forEach { tx ->
-                        val obj = JSONObject().apply {
-                            put("amount", tx.amount)
-                            put("category", tx.category)
-                            put("description", tx.description)
-                            put("isIncome", tx.isIncome)
-                            put("date", tx.date)
-                        }
-                        jsonArray.put(obj)
-                    }
-                    jsonArray.toString(2)
-                } else {
-                    val csv = StringBuilder()
-                    csv.append("شناسه,تاریخ,دسته‌بندی,توضیحات,مبلغ (تومان),نوع\n")
-                    transactions.forEach { tx ->
-                        val type = if (tx.isIncome) "درآمد" else "هزینه"
-                        val shamsiDateStr = PersianUtils.getShamsiDateString(tx.date)
-                        csv.append("${tx.id},\"$shamsiDateStr\",\"${tx.category.replace("\"", "\"\"")}\",\"${tx.description.replace("\"", "\"\"")}\",${tx.amount},$type\n")
-                    }
-                    csv.toString()
+                val payload = buildBackupPayload()
+                val encryptedBytes = withContext(Dispatchers.IO) {
+                    BackupCryptoManager.encryptBackup(payload)
                 }
 
-                val appDir = File(context.getExternalFilesDir(Environment.DIRECTORY_DOCUMENTS), "My Kiseh backup").apply {
-                    if (!exists()) mkdirs()
+                withContext(Dispatchers.IO) {
+                    val outputStream = getApplication<Application>().contentResolver.openOutputStream(uri)
+                        ?: throw Exception("امکان نوشتن در محل انتخاب‌شده وجود ندارد")
+                    outputStream.use { it.write(encryptedBytes) }
                 }
-                val outputFile = File(appDir, fileName)
-                outputFile.writeText(fileContent, Charsets.UTF_8)
 
-                try {
-                    val publicFolder = File(
-                        Environment.getExternalStoragePublicDirectory(Environment.DIRECTORY_DOWNLOADS),
-                        "My Kiseh backup"
-                    ).apply { if (!exists()) mkdirs() }
-                    outputFile.copyTo(File(publicFolder, fileName), overwrite = true)
-                } catch (_: Exception) {}
-
-                val uri: Uri = FileProvider.getUriForFile(
-                    context,
-                    "${context.packageName}.fileprovider",
-                    outputFile
+                Log.i("LocalBackup", "Backup written to URI (${encryptedBytes.size} bytes)")
+                _backupState.value = CloudBackupState.Success(
+                    "فایل بکاپ با موفقیت ذخیره شد (${payload.transactions.size} تراکنش)"
                 )
-
-                val mimeType = if (isJson) "application/json" else "text/csv"
-                val shareIntent = Intent(Intent.ACTION_SEND).apply {
-                    type = mimeType
-                    putExtra(Intent.EXTRA_STREAM, uri)
-                    putExtra(Intent.EXTRA_SUBJECT, "فایل پشتیبان اطلاعات کیسه ($fileName)")
-                    putExtra(Intent.EXTRA_TEXT, "فایل پشتیبان اطلاعات کیسه با تاریخ شمسی $shamsiDateTime")
-                    addFlags(Intent.FLAG_GRANT_READ_URI_PERMISSION)
-                }
-
-                val chooser = Intent.createChooser(shareIntent, "اشتراک‌گذاری فایل پشتیبان").apply {
-                    addFlags(Intent.FLAG_ACTIVITY_NEW_TASK)
-                    addFlags(Intent.FLAG_GRANT_READ_URI_PERMISSION)
-                }
-
-                withContext(Dispatchers.Main) {
-                    Toast.makeText(
-                        context,
-                        "✅ پشتیبان با نام «$fileName» در پوشه My Kiseh backup ذخیره شد",
-                        Toast.LENGTH_LONG
-                    ).show()
-                    context.startActivity(chooser)
-                }
             } catch (e: Exception) {
-                withContext(Dispatchers.Main) {
-                    Toast.makeText(context, "خطا در ساخت پشتیبان: ${e.message}", Toast.LENGTH_LONG).show()
-                }
+                Log.e("LocalBackup", "Backup failed", e)
+                _backupState.value = CloudBackupState.Error(
+                    e.localizedMessage ?: "خطا در ساخت فایل بکاپ"
+                )
             }
         }
     }
 
-    fun importBackupFromFile(context: Context, uri: Uri) {
-        viewModelScope.launch(Dispatchers.IO) {
+    /**
+     * خواندن فایل بکاپ از URI انتخاب‌شده توسط کاربر، رمزگشایی و بازنشانی دیتابیس.
+     */
+    fun restoreBackupFromUri(uri: Uri) {
+        viewModelScope.launch {
+            _backupState.value = CloudBackupState.InProgress("در حال خواندن و رمزگشایی فایل بکاپ...")
             try {
-                val contentResolver = context.contentResolver
-                val contentString = contentResolver.openInputStream(uri)?.use { stream ->
-                    stream.bufferedReader(Charsets.UTF_8).readText()
-                } ?: throw Exception("امکان خواندن فایل پشتیبان وجود ندارد")
+                val encryptedBytes = withContext(Dispatchers.IO) {
+                    getApplication<Application>().contentResolver.openInputStream(uri)?.use { it.readBytes() }
+                        ?: throw Exception("امکان خواندن فایل انتخاب‌شده وجود ندارد")
+                }
 
-                val trimmed = contentString.trim()
-                val importedList = mutableListOf<Transaction>()
+                val payload = withContext(Dispatchers.IO) {
+                    BackupCryptoManager.decryptBackup(encryptedBytes)
+                }
 
-                if (trimmed.startsWith("[") || trimmed.startsWith("{")) {
-                    val jsonArray = if (trimmed.startsWith("[")) {
-                        JSONArray(trimmed)
-                    } else {
-                        JSONObject(trimmed).optJSONArray("transactions") ?: JSONArray()
-                    }
-
-                    for (i in 0 until jsonArray.length()) {
-                        val obj = jsonArray.getJSONObject(i)
-                        val amount = obj.optLong("amount", 0L)
-                        val category = obj.optString("category", "متفرقه")
-                        val description = obj.optString("description", "")
-                        val isIncome = obj.optBoolean("isIncome", false)
-                        val date = obj.optLong("date", System.currentTimeMillis())
-
-                        if (amount > 0) {
-                            importedList.add(
-                                Transaction(
-                                    amount = amount,
-                                    category = category,
-                                    description = description,
-                                    isIncome = isIncome,
-                                    date = date
-                                )
-                            )
+                // بازنشانی اتمیک در دیتابیس
+                withContext(Dispatchers.IO) {
+                    database.withTransaction {
+                        if (payload.customCategories.isNotEmpty()) {
+                            database.customCategoryDao().insertAll(payload.customCategories)
                         }
-                    }
-                } else {
-                    val lines = trimmed.split("\n").map { it.trim() }.filter { it.isNotBlank() }
-                    if (lines.isEmpty()) throw Exception("فایل انتخاب شده خالی است")
-
-                    val startIndex = if (lines[0].contains("شناسه") || lines[0].contains("amount") || lines[0].contains("دسته‌بندی")) 1 else 0
-
-                    for (i in startIndex until lines.size) {
-                        val line = lines[i]
-                        val parts = line.split(",(?=(?:[^\"]*\"[^\"]*\")*[^\"]*$)".toRegex()).map {
-                            it.replace("^\"|\"$".toRegex(), "").trim()
+                        if (payload.transactions.isNotEmpty()) {
+                            database.transactionDao().insertAll(payload.transactions)
                         }
-
-                        if (parts.size >= 4) {
-                            var amount = 0L
-                            var category = "متفرقه"
-                            var description = ""
-                            var isIncome = false
-
-                            if (parts.size >= 6) {
-                                category = parts[2].ifBlank { "متفرقه" }
-                                description = parts[3]
-                                amount = parts[4].replace("[^0-9]".toRegex(), "").toLongOrNull() ?: 0L
-                                isIncome = parts[5].contains("درآمد") || parts[5].lowercase().contains("income")
-                            } else {
-                                amount = parts.mapNotNull { col -> col.replace("[^0-9]".toRegex(), "").toLongOrNull() }.firstOrNull { it > 0 } ?: 0L
-                                category = parts.getOrNull(1)?.ifBlank { "متفرقه" } ?: "متفرقه"
-                                description = parts.getOrNull(2) ?: ""
-                                isIncome = line.contains("درآمد")
-                            }
-
-                            if (amount > 0) {
-                                importedList.add(
-                                    Transaction(
-                                        amount = amount,
-                                        category = category,
-                                        description = description,
-                                        isIncome = isIncome,
-                                        date = System.currentTimeMillis()
-                                    )
-                                )
-                            }
+                        if (payload.savingsGoals.isNotEmpty()) {
+                            database.savingsGoalDao().insertAll(payload.savingsGoals)
+                        }
+                        if (payload.recurringTransactions.isNotEmpty()) {
+                            database.recurringTransactionDao().insertAll(payload.recurringTransactions)
                         }
                     }
                 }
 
-                if (importedList.isEmpty()) {
-                    throw Exception("هیچ اطلاعات معتبری در فایل یافت نشد")
+                // بازیابی داده‌های یادگیری پیامک بانکی
+                if (payload.learnedMerchants.isNotEmpty()) {
+                    try {
+                        userCategoryLearner.learnAll(payload.learnedMerchants)
+                    } catch (e: Exception) {
+                        Log.w("LocalBackup", "Failed to restore learned merchants: ${e.message}")
+                    }
                 }
 
-                importedList.forEach { repository.insert(it) }
+                // بازیابی تنظیمات
+                _budgetLimit.value = payload.appPreferences.budgetLimit
+                _isCurrencyInRial.value = payload.appPreferences.isCurrencyInRial
+                _selectedPeriod.value = payload.appPreferences.selectedPeriod
 
-                withContext(Dispatchers.Main) {
-                    Toast.makeText(
-                        context,
-                        "✅ با موفقیت ${importedList.size} تراکنش از فایل پشتیبان بازیابی و اضافه شد",
-                        Toast.LENGTH_LONG
-                    ).show()
-                }
+                val prefs = getApplication<Application>().getSharedPreferences("kiseh_prefs", Context.MODE_PRIVATE)
+                prefs.edit()
+                    .putLong("budget_limit", payload.appPreferences.budgetLimit)
+                    .putBoolean("is_currency_rial", payload.appPreferences.isCurrencyInRial)
+                    .putString("selected_period", payload.appPreferences.selectedPeriod)
+                    .apply()
+
+                Log.i("LocalBackup", "Restore complete: tx=${payload.transactions.size}")
+                _backupState.value = CloudBackupState.Success(
+                    "اطلاعات با موفقیت بازیابی شد (${payload.transactions.size} تراکنش)"
+                )
             } catch (e: Exception) {
-                withContext(Dispatchers.Main) {
-                    Toast.makeText(context, "خطا در بازیابی فایل: ${e.message}", Toast.LENGTH_LONG).show()
-                }
+                Log.e("LocalBackup", "Restore failed", e)
+                _backupState.value = CloudBackupState.Error(
+                    e.localizedMessage ?: "خطا در بازیابی اطلاعات. فایل ممکن است خراب یا رمزنگاری‌شده با کلید متفاوت باشد"
+                )
             }
         }
     }
 
-    fun addSampleData() {
-        viewModelScope.launch {
-            val samples = listOf(
-                Transaction(amount = 25000, category = "خوراکی", description = "نون و شیر خرید روزانه"),
-                Transaction(amount = 60000, category = "حمل‌ونقل", description = "بنزین آزاد"),
-                Transaction(amount = 180000, category = "قبض", description = "قبض برق و اینترنت همراه"),
-                Transaction(amount = 350000, category = "پوشاک", description = "خرید کفش ورزشی"),
-                Transaction(amount = 1200000, category = "درآمد", description = "پاداش واریزی کارفرما", isIncome = true),
-                Transaction(amount = 85000, category = "درمان", description = "شربت و قرص از داروخانه"),
-                Transaction(amount = 140000, category = "تفریح", description = "کافه و پیتزا با دوستان")
-            )
-            samples.forEach { repository.insert(it) }
-        }
+    fun resetCloudBackupState() {
+        _backupState.value = CloudBackupState.Idle
     }
 
-    fun addCustomCategory(
-        name: String,
-        iconName: String,
-        colorHex: String,
-        isIncome: Boolean,
-        onSuccess: () -> Unit = {},
-        onError: (String) -> Unit = {}
-    ) {
-        val trimmed = name.trim()
-        if (trimmed.isEmpty()) {
-            onError("لطفاً نام دسته‌بندی را وارد کنید")
-            return
+    /**
+     * ساخت payload بکاپ از داده‌های فعلی دیتابیس
+     */
+    private suspend fun buildBackupPayload(): KisehBackupPayload = withContext(Dispatchers.IO) {
+        val transactions = database.transactionDao().getAllTransactionsList()
+        val goals = database.savingsGoalDao().getAllGoalsList()
+        val recurring = database.recurringTransactionDao().getAllList()
+        val categories = database.customCategoryDao().getAllCategoriesList()
+
+        val learnedMerchants = try {
+            userCategoryLearner.getAllLearned()
+        } catch (e: Exception) {
+            emptyMap()
         }
 
-        val existsInDefault = CategoryHelper.categories.any { it.name.equals(trimmed, ignoreCase = true) }
-        viewModelScope.launch {
-            val app = getApplication<Application>()
-            val currentCustom = categoryRepository.allCustomCategories.first()
-            if (!FeatureUsageManager.canAddCustomCategory(app, currentCustom.size)) {
-                onError("در نسخه رایگان حداکثر ۲ دسته‌بندی اختصاصی مجاز است. برای دسته‌بندی نامحدود نسخه VIP را فعال کنید.")
-                return@launch
-            }
+        val prefsBackup = AppPreferencesBackup(
+            budgetLimit = _budgetLimit.value,
+            isCurrencyInRial = _isCurrencyInRial.value,
+            selectedPeriod = _selectedPeriod.value,
+            isVip = BillingManager.isProUser(getApplication())
+        )
 
-            val existsInCustom = categoryRepository.getCategoryByName(trimmed) != null
-            if (existsInDefault || existsInCustom) {
-                onError("دسته‌بندی با نام «$trimmed» قبلاً ثبت شده است")
-                return@launch
-            }
-
-            val category = CustomCategory(
-                name = trimmed,
-                iconName = iconName,
-                colorHex = colorHex,
-                isIncome = isIncome,
-                isDefault = false
-            )
-            categoryRepository.insertCategory(category)
-            onSuccess()
-        }
-    }
-
-    fun updateCustomCategory(
-        category: CustomCategory,
-        oldName: String,
-        onSuccess: () -> Unit = {},
-        onError: (String) -> Unit = {}
-    ) {
-        val trimmed = category.name.trim()
-        if (trimmed.isEmpty()) {
-            onError("لطفاً نام دسته‌بندی را وارد کنید")
-            return
-        }
-
-        viewModelScope.launch {
-            if (!trimmed.equals(oldName, ignoreCase = true)) {
-                val existsInDefault = CategoryHelper.categories.any { it.name.equals(trimmed, ignoreCase = true) }
-                val existsInCustom = categoryRepository.getCategoryByName(trimmed) != null
-                if (existsInDefault || existsInCustom) {
-                    onError("دسته‌بندی دیگری با نام «$trimmed» وجود دارد")
-                    return@launch
-                }
-            }
-
-            categoryRepository.updateCategory(category.copy(name = trimmed))
-            if (!trimmed.equals(oldName, ignoreCase = true)) {
-                repository.updateCategoryName(oldName, trimmed)
-                recurringTransactionRepository.updateCategoryName(oldName, trimmed)
-            }
-            onSuccess()
-        }
-    }
-
-    fun deleteCustomCategory(
-        category: CustomCategory,
-        onSuccess: () -> Unit = {},
-        onError: (String) -> Unit = {}
-    ) {
-        if (category.isDefault) {
-            onError("دسته‌بندی‌های پیش‌فرض سیستم قابل حذف نیستند")
-            return
-        }
-
-        viewModelScope.launch {
-            categoryRepository.deleteCategory(category)
-            onSuccess()
-        }
+        KisehBackupPayload(
+            timestamp = System.currentTimeMillis(),
+            transactions = transactions,
+            savingsGoals = goals,
+            recurringTransactions = recurring,
+            customCategories = categories,
+            learnedMerchants = learnedMerchants,
+            appPreferences = prefsBackup
+        )
     }
 
     // =========================================================================
-    // Security & App Lock Methods
+    // Security
     // =========================================================================
 
-    fun unlockApp() {
-        _isAppCurrentlyLocked.value = false
-    }
+    fun unlockApp() { _isAppCurrentlyLocked.value = false }
 
     fun lockApp() {
-        if (isAppLockEnabled.value) {
-            _isAppCurrentlyLocked.value = true
-        }
+        if (isAppLockEnabled.value) _isAppCurrentlyLocked.value = true
     }
 
     fun verifyPin(pin: String, onResult: (Boolean) -> Unit) {
         viewModelScope.launch {
             val isCorrect = securityManager.verifyPin(pin)
-            if (isCorrect) {
-                _isAppCurrentlyLocked.value = false
-            }
+            if (isCorrect) _isAppCurrentlyLocked.value = false
             onResult(isCorrect)
         }
     }
@@ -1152,9 +938,7 @@ class MainViewModel(application: Application) : AndroidViewModel(application) {
         }
         viewModelScope.launch {
             securityManager.savePin(pin)
-            if (enableBiometric) {
-                securityManager.setBiometricEnabled(true)
-            }
+            if (enableBiometric) securityManager.setBiometricEnabled(true)
             _isAppCurrentlyLocked.value = false
             onSuccess()
         }
@@ -1199,247 +983,14 @@ class MainViewModel(application: Application) : AndroidViewModel(application) {
     }
 
     fun setBiometricEnabled(enabled: Boolean) {
-        viewModelScope.launch {
-            securityManager.setBiometricEnabled(enabled)
-        }
+        viewModelScope.launch { securityManager.setBiometricEnabled(enabled) }
     }
 
     fun setLockOnLaunchEnabled(enabled: Boolean) {
-        viewModelScope.launch {
-            securityManager.setLockOnLaunchEnabled(enabled)
-        }
+        viewModelScope.launch { securityManager.setLockOnLaunchEnabled(enabled) }
     }
 
     fun checkBiometricAvailability(): BiometricAuthManager.BiometricStatus {
         return BiometricAuthManager.checkBiometricAvailability(getApplication())
-    }
-
-    // =========================================================================
-    // Cloud Backup & Restore Operations (Firebase)
-    // =========================================================================
-
-    /**
-     * ورود با ایمیل و رمز عبور به Firebase
-     */
-    fun signInWithEmail(email: String, password: String) {
-        if (!BillingManager.isProUser(getApplication())) {
-            _cloudBackupState.value = CloudBackupState.Error("بکاپ ابری فقط مخصوص مشترکین نسخه VIP می‌باشد.")
-            return
-        }
-        viewModelScope.launch {
-            _cloudBackupState.value = CloudBackupState.InProgress("در حال ورود به حساب کاربری...")
-            val result = firebaseAuthManager.signIn(email, password)
-            result.onSuccess {
-                _cloudBackupState.value = CloudBackupState.Success("ورود با موفقیت انجام شد.")
-                // بارگذاری متادیتای آخرین بکاپ
-                refreshBackupMetadata()
-            }.onFailure { error ->
-                _cloudBackupState.value = CloudBackupState.Error(
-                    error.localizedMessage ?: "خطا در ورود"
-                )
-            }
-        }
-    }
-
-    /**
-     * ثبت‌نام با ایمیل، رمز عبور و نام نمایشی در Firebase
-     */
-    fun signUpWithEmail(email: String, password: String, displayName: String) {
-        if (!BillingManager.isProUser(getApplication())) {
-            _cloudBackupState.value = CloudBackupState.Error("بکاپ ابری فقط مخصوص مشترکین نسخه VIP می‌باشد.")
-            return
-        }
-        viewModelScope.launch {
-            _cloudBackupState.value = CloudBackupState.InProgress("در حال ساخت حساب کاربری...")
-            val result = firebaseAuthManager.signUp(email, password, displayName)
-            result.onSuccess {
-                _cloudBackupState.value = CloudBackupState.Success("حساب کاربری با موفقیت ساخته شد.")
-            }.onFailure { error ->
-                _cloudBackupState.value = CloudBackupState.Error(
-                    error.localizedMessage ?: "خطا در ثبت‌نام"
-                )
-            }
-        }
-    }
-
-    /**
-     * خروج از حساب کاربری Firebase
-     */
-    fun disconnectGoogleAccount() {
-        firebaseAuthManager.signOut()
-        _lastBackupMetadata.value = null
-        _availableBackups.value = emptyList()
-        _cloudBackupState.value = CloudBackupState.Idle
-    }
-
-    /**
-     * متد سازگاری با نسخه قبلی UI - فقط برای جلوگیری از خطای کامپایل
-     * (توصیه می‌شود UI به signInWithEmail و signUpWithEmail منتقل شود)
-     */
-    @Deprecated("از signInWithEmail و signUpWithEmail استفاده کنید", ReplaceWith("signInWithEmail"))
-    fun connectGoogleAccount(email: String, displayName: String?) {
-        _cloudBackupState.value = CloudBackupState.Error(
-            "برای اتصال به حساب ابری، لطفاً از رمز عبور استفاده کنید. صفحه ورود به‌روزرسانی می‌شود."
-        )
-    }
-
-    /**
-     * بارگذاری متادیتای آخرین بکاپ از Firestore
-     */
-    fun refreshBackupMetadata() {
-        if (!firebaseAuthManager.isSignedIn()) {
-            _lastBackupMetadata.value = null
-            return
-        }
-        viewModelScope.launch {
-            val result = firebaseBackupRepository.listAvailableBackups()
-            result.onSuccess { list ->
-                _lastBackupMetadata.value = list.firstOrNull()
-            }.onFailure {
-                _lastBackupMetadata.value = null
-            }
-        }
-    }
-
-    fun resetCloudBackupState() {
-        _cloudBackupState.value = CloudBackupState.Idle
-    }
-
-    /**
-     * ایجاد بکاپ ابری در Firebase
-     */
-    fun createCloudBackup() {
-        if (!BillingManager.isProUser(getApplication())) {
-            _cloudBackupState.value = CloudBackupState.Error("پشتیبان‌گیری ابری فقط مخصوص مشترکین نسخه VIP می‌باشد.")
-            return
-        }
-        if (!firebaseAuthManager.isSignedIn()) {
-            _cloudBackupState.value = CloudBackupState.Error("لطفاً ابتدا وارد حساب کاربری شوید.")
-            return
-        }
-        viewModelScope.launch {
-            _cloudBackupState.value = CloudBackupState.InProgress("در حال استخراج، رمزنگاری و ارسال اطلاعات به فضای ابری...")
-            val result = firebaseBackupRepository.createAndUploadBackup(
-                budgetLimit = _budgetLimit.value,
-                isCurrencyInRial = _isCurrencyInRial.value,
-                selectedPeriod = _selectedPeriod.value,
-                isVip = BillingManager.isProUser(getApplication())
-            )
-
-            result.onSuccess { metadata ->
-                _lastBackupMetadata.value = metadata
-                _cloudBackupState.value = CloudBackupState.Success(
-                    message = "نسخه پشتیبان رمزنگاری‌شده با موفقیت در فضای ابری ذخیره شد.",
-                    metadata = metadata
-                )
-            }.onFailure { error ->
-                _cloudBackupState.value = CloudBackupState.Error(
-                    errorMessage = error.localizedMessage ?: "خطای ناشناخته در فرآیند تهیه نسخه پشتیبان ابری"
-                )
-            }
-        }
-    }
-
-    /**
-     * دریافت لیست بکاپ‌های موجود در Firestore
-     */
-    fun fetchAvailableBackups() {
-        if (!BillingManager.isProUser(getApplication())) {
-            _cloudBackupState.value = CloudBackupState.Error("بازیابی اطلاعات ابری فقط مخصوص مشترکین نسخه VIP می‌باشد.")
-            return
-        }
-        if (!firebaseAuthManager.isSignedIn()) {
-            _cloudBackupState.value = CloudBackupState.Error("لطفاً ابتدا وارد حساب کاربری خود شوید.")
-            return
-        }
-
-        viewModelScope.launch {
-            _cloudBackupState.value = CloudBackupState.CheckingBackups("در حال بررسی نسخه‌های پشتیبان...")
-            val result = firebaseBackupRepository.listAvailableBackups()
-            result.onSuccess { list ->
-                if (list.isEmpty()) {
-                    _availableBackups.value = emptyList()
-                    _cloudBackupState.value = CloudBackupState.Error("هیچ نسخه پشتیبانی پیدا نشد")
-                } else {
-                    _availableBackups.value = list
-                    _cloudBackupState.value = CloudBackupState.BackupsListReady(list)
-                }
-            }.onFailure { error ->
-                _availableBackups.value = emptyList()
-                _cloudBackupState.value = CloudBackupState.Error(
-                    error.localizedMessage ?: "هیچ نسخه پشتیبانی پیدا نشد"
-                )
-            }
-        }
-    }
-
-    /**
-     * بازیابی نسخه مشخص از Firestore
-     */
-    fun restoreSelectedBackup(metadata: BackupMetadata, onSuccess: (KisehBackupPayload) -> Unit = {}) {
-        viewModelScope.launch {
-            _cloudBackupState.value = CloudBackupState.InProgress("در حال دانلود، رمزگشایی و بازیابی نسخه پشتیبان...")
-            val result = firebaseBackupRepository.restoreBackup(metadata.fileName)
-
-            result.onSuccess { payload ->
-                _budgetLimit.value = payload.appPreferences.budgetLimit
-                _isCurrencyInRial.value = payload.appPreferences.isCurrencyInRial
-                _selectedPeriod.value = payload.appPreferences.selectedPeriod
-
-                val prefs = getApplication<Application>().getSharedPreferences("kiseh_prefs", Context.MODE_PRIVATE)
-                prefs.edit()
-                    .putLong("budget_limit", payload.appPreferences.budgetLimit)
-                    .putBoolean("is_currency_rial", payload.appPreferences.isCurrencyInRial)
-                    .putString("selected_period", payload.appPreferences.selectedPeriod)
-                    .apply()
-
-                _lastBackupMetadata.value = metadata
-                _cloudBackupState.value = CloudBackupState.Success(
-                    message = "اطلاعات با موفقیت کامل بازیابی و در پایگاه داده بازنشانی شدند.",
-                    metadata = metadata
-                )
-                onSuccess(payload)
-            }.onFailure { error ->
-                _cloudBackupState.value = CloudBackupState.Error(
-                    errorMessage = error.localizedMessage ?: "خطا در بازیابی اطلاعات از نسخه پشتیبان"
-                )
-            }
-        }
-    }
-
-    /**
-     * بازیابی آخرین نسخه پشتیبان از Firestore
-     */
-    fun restoreCloudBackup(onSuccess: (KisehBackupPayload) -> Unit = {}) {
-        if (!firebaseAuthManager.isSignedIn()) {
-            _cloudBackupState.value = CloudBackupState.Error("لطفاً ابتدا وارد حساب کاربری خود شوید.")
-            return
-        }
-        viewModelScope.launch {
-            _cloudBackupState.value = CloudBackupState.InProgress("در حال دانلود، رمزگشایی و اعتبارسنجی نسخه ابری...")
-            val result = firebaseBackupRepository.restoreBackup()
-
-            result.onSuccess { payload ->
-                _budgetLimit.value = payload.appPreferences.budgetLimit
-                _isCurrencyInRial.value = payload.appPreferences.isCurrencyInRial
-                _selectedPeriod.value = payload.appPreferences.selectedPeriod
-
-                val prefs = getApplication<Application>().getSharedPreferences("kiseh_prefs", Context.MODE_PRIVATE)
-                prefs.edit()
-                    .putLong("budget_limit", payload.appPreferences.budgetLimit)
-                    .putBoolean("is_currency_rial", payload.appPreferences.isCurrencyInRial)
-                    .putString("selected_period", payload.appPreferences.selectedPeriod)
-                    .apply()
-
-                _cloudBackupState.value = CloudBackupState.Success(
-                    message = "اطلاعات با موفقیت کامل بازیابی و در پایگاه داده بازنشانی شدند."
-                )
-                onSuccess(payload)
-            }.onFailure { error ->
-                _cloudBackupState.value = CloudBackupState.Error(
-                    errorMessage = error.localizedMessage ?: "خطا در بازیابی اطلاعات از نسخه پشتیبان"
-                )
-            }
-        }
     }
 }
