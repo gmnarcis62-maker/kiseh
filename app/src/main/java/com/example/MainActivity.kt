@@ -1,4 +1,4 @@
-﻿package com.example
+package com.example
 
 import android.Manifest
 import android.content.Context
@@ -52,7 +52,6 @@ class MainActivity : FragmentActivity() {
     private val permissionLauncher = registerForActivityResult(
         ActivityResultContracts.RequestMultiplePermissions()
     ) { _ ->
-        // بعد از دریافت مجوزها، اعلان را به‌روزرسانی کن
         try {
             QuickVoiceNotificationHelper.showQuickVoiceNotification(this)
         } catch (_: Throwable) {}
@@ -70,15 +69,12 @@ class MainActivity : FragmentActivity() {
             requestRequiredPermissions()
         } catch (_: Throwable) {}
 
-        // شروع سرویس پس‌زمینه برای زنده نگه داشتن برنامه جهت دریافت پیامک و ویجت
         startBackgroundService()
 
-        // به‌روزرسانی اعلان سرویس پس‌زمینه بر اساس وضعیت ثبت صوتی (VIP)
         try {
             QuickVoiceNotificationHelper.showQuickVoiceNotification(this)
         } catch (_: Throwable) {}
 
-        // درخواست معافیت از بهینه‌سازی باتری برای پایدار ماندن سرویس
         requestIgnoreBatteryOptimization()
 
         setContent {
@@ -147,8 +143,8 @@ class MainActivity : FragmentActivity() {
                         android.util.Log.d("BillingManager", "Purchase State: $purchaseState")
                         android.util.Log.d("BillingManager", "Verify Started: productId=$productId, signature=$dataSignature")
 
-                        val isVerified = if (!dataSignature.isNullOrBlank() && com.example.billing.BillingManager.BAZAAR_PUBLIC_KEY.isNotBlank()) {
-                            com.example.billing.BillingManager.verifyPurchase(purchaseData, dataSignature, com.example.billing.BillingManager.BAZAAR_PUBLIC_KEY)
+                        val isVerified = if (!dataSignature.isNullOrBlank() && com.example.billing.BillingManager.MYKET_PUBLIC_KEY.isNotBlank()) {
+                            com.example.billing.BillingManager.verifyPurchase(purchaseData, dataSignature, com.example.billing.BillingManager.MYKET_PUBLIC_KEY)
                         } else {
                             true
                         }
@@ -169,7 +165,6 @@ class MainActivity : FragmentActivity() {
                             com.example.billing.BillingManager.setVipUser(this, true, token, time, productId)
                             android.util.Log.d("BillingManager", "VIP Activated: token=$token, time=$time, product=$productId")
                             android.widget.Toast.makeText(this, "🎉 خرید با موفقیت تایید شد! دسترسی دائم VIP فعال گردید.", android.widget.Toast.LENGTH_LONG).show()
-                            // بعد از فعال شدن VIP، اعلان سرویس را به‌روزرسانی کن
                             try {
                                 QuickVoiceNotificationHelper.showQuickVoiceNotification(this)
                             } catch (_: Throwable) {}
@@ -180,7 +175,7 @@ class MainActivity : FragmentActivity() {
                         }
                     } catch (e: Throwable) {
                         android.util.Log.e("BillingManager", "Error parsing onActivityResult purchaseData", e)
-                        android.widget.Toast.makeText(this, "خطا در پردازش اطلاعات خرید دریافتی از کافهبازار.", android.widget.Toast.LENGTH_SHORT).show()
+                        android.widget.Toast.makeText(this, "خطا در پردازش اطلاعات خرید دریافتی از مایکت.", android.widget.Toast.LENGTH_SHORT).show()
                         return
                     }
                 } else if (responseCode == 7) {
@@ -216,7 +211,6 @@ class MainActivity : FragmentActivity() {
     }
 
     private fun startBackgroundService() {
-        // برای اندروید ۸ به بالا باید از startForegroundService استفاده کرد
         val intent = Intent(this, SmsBackgroundService::class.java)
         if (Build.VERSION.SDK_INT >= Build.VERSION_CODES.O) {
             startForegroundService(intent)
@@ -225,10 +219,6 @@ class MainActivity : FragmentActivity() {
         }
     }
 
-    /**
-     * درخواست معافیت از بهینه‌سازی باتری برای پایدار ماندن سرویس پس‌زمینه.
-     * این کار باعث می‌شود اندروید سرویس ما را در پس‌زمینه به قتل نرساند.
-     */
     private fun requestIgnoreBatteryOptimization() {
         if (Build.VERSION.SDK_INT >= Build.VERSION_CODES.M) {
             try {

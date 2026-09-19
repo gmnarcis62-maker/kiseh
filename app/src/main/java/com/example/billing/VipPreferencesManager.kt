@@ -29,7 +29,7 @@ data class VipPurchaseInfo(
 
 /**
  * مدیریت ماندگار وضعیت اشتراک VIP با Jetpack DataStore
- * منبع اصلی و معتبر فعال بودن VIP و خرید تایید شده کافهبازار
+ * منبع اصلی و معتبر فعال بودن VIP و خرید تایید شده مایکت
  */
 class VipPreferencesManager(private val context: Context) {
 

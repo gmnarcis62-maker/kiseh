@@ -3,7 +3,6 @@
 import android.app.Activity
 import android.content.Context
 import android.content.ContextWrapper
-import android.content.Intent
 import android.widget.Toast
 import androidx.compose.foundation.background
 import androidx.compose.foundation.border
@@ -87,10 +86,7 @@ fun ProPaywallDialog(
     var isRestoring by remember { mutableStateOf(false) }
 
     LaunchedEffect(Unit) {
-        // ۱. اطمینان از تلاش برای اتصال به سرویس کافه‌بازار
         BillingManager.init(context)
-
-        // ۲. تلاش مکرر برای دریافت قیمت (تا ۱۵ بار، هر ۱ ثانیه)
         var attempts = 0
         while (attempts < 15 && BillingManager.skuPriceState.value.isNullOrBlank()) {
             delay(1000L)
@@ -111,7 +107,6 @@ fun ProPaywallDialog(
                         .verticalScroll(rememberScrollState()),
                     horizontalAlignment = Alignment.CenterHorizontally
                 ) {
-                    // Header Banner
                     Box(
                         modifier = Modifier
                             .fillMaxWidth()
@@ -141,7 +136,7 @@ fun ProPaywallDialog(
                                 )
                             }
                             Text(
-                                text = if (isAlreadyPro) "اشتراک فعال است 🎉" else "ارتقای دائمی با پرداخت درون‌برنامه‌ای کافه‌بازار",
+                                text = if (isAlreadyPro) "اشتراک فعال است 🎉" else "ارتقای دائمی با پرداخت درون‌برنامه‌ای مایکت",
                                 fontSize = 12.sp,
                                 color = Color.White.copy(alpha = 0.9f),
                                 modifier = Modifier.padding(top = 4.dp)
@@ -152,7 +147,6 @@ fun ProPaywallDialog(
                     Spacer(modifier = Modifier.height(14.dp))
 
                     if (isAlreadyPro) {
-                        // وضعیت VIP فعال است
                         Surface(
                             modifier = Modifier
                                 .clip(RoundedCornerShape(12.dp))
@@ -203,7 +197,6 @@ fun ProPaywallDialog(
                             }
                         }
                     } else {
-                        // وضعیت نسخه رایگان
                         Surface(
                             modifier = Modifier
                                 .clip(RoundedCornerShape(12.dp))
@@ -226,7 +219,6 @@ fun ProPaywallDialog(
 
                         Spacer(modifier = Modifier.height(12.dp))
 
-                        // امکانات محدود
                         Card(
                             modifier = Modifier.fillMaxWidth(),
                             shape = RoundedCornerShape(14.dp),
@@ -261,7 +253,6 @@ fun ProPaywallDialog(
 
                         Spacer(modifier = Modifier.height(10.dp))
 
-                        // امکانات غیرمحدود VIP
                         Card(
                             modifier = Modifier.fillMaxWidth(),
                             shape = RoundedCornerShape(14.dp),
@@ -288,7 +279,6 @@ fun ProPaywallDialog(
 
                         Spacer(modifier = Modifier.height(12.dp))
 
-                        // Price Badge
                         Card(
                             modifier = Modifier.fillMaxWidth(),
                             shape = RoundedCornerShape(14.dp),
@@ -302,7 +292,7 @@ fun ProPaywallDialog(
                                 horizontalAlignment = Alignment.CenterHorizontally
                             ) {
                                 Text(
-                                    text = "مبلغ فعال‌سازی VIP دائمی کافه‌بازار:",
+                                    text = "مبلغ فعال‌سازی VIP دائمی مایکت:",
                                     fontSize = 11.sp,
                                     color = MaterialTheme.colorScheme.onSurface.copy(alpha = 0.7f)
                                 )
@@ -322,11 +312,11 @@ fun ProPaywallDialog(
                                 )
                                 Spacer(modifier = Modifier.height(4.dp))
                                 Text(
-                                    text = "🔒 پرداخت امن از طریق کافه‌بازار",
+                                    text = "🔒 پرداخت امن از طریق مایکت",
                                     fontSize = 11.sp,
                                     fontWeight = FontWeight.Medium,
                                     color = EmeraldPrimary,
-                                    modifier = Modifier.testTag("secure_payment_bazaar_badge")
+                                    modifier = Modifier.testTag("secure_payment_myket_badge")
                                 )
                             }
                         }
@@ -340,7 +330,6 @@ fun ProPaywallDialog(
                         verticalArrangement = Arrangement.spacedBy(8.dp),
                         horizontalAlignment = Alignment.CenterHorizontally
                     ) {
-                        // دکمه اصلی فعالسازی VIP
                         Button(
                             onClick = {
                                 val targetActivity = activity ?: context.findActivity()
@@ -366,14 +355,13 @@ fun ProPaywallDialog(
                             Icon(imageVector = Icons.Default.Star, contentDescription = null, modifier = Modifier.size(18.dp))
                             Spacer(modifier = Modifier.width(6.dp))
                             val purchaseButtonText = if (!dynamicPrice.isNullOrBlank()) {
-                                "خرید VIP از کافه‌بازار ($dynamicPrice)"
+                                "خرید VIP از مایکت ($dynamicPrice)"
                             } else {
-                                "خرید VIP از کافه‌بازار"
+                                "خرید VIP از مایکت"
                             }
                             Text(purchaseButtonText, fontWeight = FontWeight.Bold, fontSize = 13.sp)
                         }
 
-                        // دکمه بازیابی خرید
                         OutlinedButton(
                             onClick = {
                                 isRestoring = true
@@ -396,42 +384,6 @@ fun ProPaywallDialog(
                             Text(if (isRestoring) "در حال بازیابی..." else "بازیابی خرید", fontSize = 12.sp)
                         }
 
-                        // دکمه ثبت نظر در کافه‌بازار
-                        OutlinedButton(
-                            onClick = {
-                                try {
-                                    val intent = Intent(Intent.ACTION_VIEW).apply {
-                                        data = android.net.Uri.parse("bazaar://details?id=${context.packageName}")
-                                        setPackage("com.farsitel.bazaar")
-                                    }
-                                    context.startActivity(intent)
-                                } catch (_: Exception) {
-                                    try {
-                                        val intent = Intent(Intent.ACTION_VIEW).apply {
-                                            data = android.net.Uri.parse("https://cafebazaar.ir/app/${context.packageName}")
-                                        }
-                                        context.startActivity(intent)
-                                    } catch (_: Exception) {
-                                        Toast.makeText(context, "کافه‌بازار روی دستگاه شما نصب نیست", Toast.LENGTH_SHORT).show()
-                                    }
-                                }
-                            },
-                            modifier = Modifier
-                                .fillMaxWidth()
-                                .heightIn(min = 48.dp)
-                                .testTag("rate_in_bazaar_button"),
-                            shape = RoundedCornerShape(12.dp)
-                        ) {
-                            Icon(
-                                imageVector = Icons.Default.Star,
-                                contentDescription = null,
-                                modifier = Modifier.size(16.dp)
-                            )
-                            Spacer(modifier = Modifier.width(6.dp))
-                            Text("ثبت امتیاز و نظر در کافه‌بازار", fontSize = 12.sp)
-                        }
-
-                        // دکمه ادامه با نسخه رایگان
                         TextButton(
                             onClick = onDismiss,
                             modifier = Modifier

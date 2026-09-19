@@ -1,4 +1,4 @@
-﻿package com.example.billing
+package com.example.billing
 
 import android.app.Activity
 import android.app.PendingIntent
@@ -30,23 +30,24 @@ data class FreeVoiceUsage(
 )
 
 /**
- * مدیریت پرداخت درون‌برنامه‌ای کافهبازار (Bazaar In-App Billing) و فعال‌سازی اشتراک دائم VIP.
+ * مدیریت پرداخت درون‌برنامه‌ای مایکت (Myket In-App Billing) و فعال‌سازی اشتراک دائم VIP.
  */
 object BillingManager {
 
     private const val TAG = "BillingManager"
 
-    const val BAZAAR_PUBLIC_KEY = "MIHNMA0GCSqGSIb3DQEBAQUAA4G7ADCBtwKBrwCivzZfp5mTKGMtNtJVPF1Mobx5Y6vOJeEZzKo0EunleE8YCkFb1c7Mg3qP+ud7VbYrjdXp/Kh0/KNVNn2NdAfeyjnvAN+b3K4ZDznX9/mWeiLEFUvPO8WfHPNX499Y1WEEUeKqgZNtywBWbaJjU83tSlnx7wjZTTBcxsW4cIoU/yZH7pfVmxrDCG8RvUEMOK9UbWTr9cl9+EBU4rkfxkRm04jJe4ZtmHQrMfPjkrMCAwEAAQ=="
+    // کلید عمومی RSA مایکت
+    const val MYKET_PUBLIC_KEY = "MIGfMA0GCSqGSIb3DQEBAQUAA4GNADCBiQKBgQChuEJCVjyXbvgOF74J3Dzbo86482Q+HI7UFFX1odEhqQ4qBO/62dEtjBvMzxUe8rZeVEpxJeATTx95+FIZJPiogXVCYhWwXokrSYO0F67wgTivoapyUUIevzZtZhi6JTEQebIPNR2J8qIRPzzC09FOVylhNobJGqXXcet1fzlrOQIDAQAB"
 
-    const val BAZAAR_PACKAGE = "com.farsitel.bazaar"
-    const val BAZAAR_BILLING_ACTION = "ir.cafebazaar.pardakht.InAppBillingService.BIND"
+    const val MYKET_PACKAGE = "ir.mservices.market"
+    const val MYKET_BILLING_ACTION = "ir.mservices.market.InAppBillingService.BIND"
 
     const val SKU_PRO_LIFETIME = "kiseh_pro_lifetime"
     const val SKU_VIP_LIFETIME = "kiseh_pro_lifetime"
     val ALL_VIP_SKUS = listOf(SKU_PRO_LIFETIME)
 
     const val PURCHASE_REQUEST_CODE = 10001
-    const val STORE_BAZAAR = "bazaar"
+    const val STORE_MYKET = "myket"
     private const val PREFS_NAME = "kiseh_billing_prefs"
     private const val KEY_IS_PRO = "is_pro_user"
     private const val KEY_PURCHASE_STORE = "purchase_store"
@@ -77,9 +78,8 @@ object BillingManager {
         override fun onServiceConnected(name: ComponentName?, service: IBinder?) {
             try {
                 mService = IInAppBillingService.Stub.asInterface(service)
-                Log.d(TAG, "Billing Connect Result: true (Connected to Bazaar: ${name?.packageName})")
+                Log.d(TAG, "Billing Connect Result: true (Connected to Myket: ${name?.packageName})")
                 appContext?.let { ctx ->
-                    // تاخیر کوتاه تا سرویس کاملاً آماده شود
                     CoroutineScope(Dispatchers.IO).launch {
                         delay(800)
                         querySkuDetailsInternal(ctx, attempt = 1, maxAttempts = 5, onResult = { _, _ -> })
@@ -108,7 +108,8 @@ object BillingManager {
             val store = prefs.getString(KEY_PURCHASE_STORE, null)
             val isPro = prefs.getBoolean(KEY_IS_PRO, false)
 
-            if (isPro && (store == "bazaar" || (store != null && store != STORE_BAZAAR))) {
+            // اگر از استور دیگری (مثل کافه‌بازار) خرید کرده باشد، پاکسازی شود
+            if (isPro && (store == "bazaar" || (store != null && store != STORE_MYKET))) {
                 prefs.edit()
                     .putBoolean(KEY_IS_PRO, false)
                     .remove(KEY_PURCHASE_STORE)
@@ -131,25 +132,25 @@ object BillingManager {
                     val vipInfo = VipPreferencesManager(applicationContext).getVipInfo()
                     if (vipInfo.isVip) {
                         _isProState.value = true
-                        prefs.edit().putBoolean(KEY_IS_PRO, true).putString(KEY_PURCHASE_STORE, STORE_BAZAAR).apply()
+                        prefs.edit().putBoolean(KEY_IS_PRO, true).putString(KEY_PURCHASE_STORE, STORE_MYKET).apply()
                     }
                 } catch (_: Throwable) {}
             }
 
             if (mService == null && !isBound) {
-                Log.d(TAG, "Billing Connect Start: pkg=$BAZAAR_PACKAGE")
+                Log.d(TAG, "Billing Connect Start: pkg=$MYKET_PACKAGE")
                 CoroutineScope(Dispatchers.IO).launch {
                     try {
                         val pm = applicationContext.packageManager
-                        val bazaarIntent = Intent(BAZAAR_BILLING_ACTION).apply {
-                            setPackage(BAZAAR_PACKAGE)
+                        val myketIntent = Intent(MYKET_BILLING_ACTION).apply {
+                            setPackage(MYKET_PACKAGE)
                         }
-                        if (pm.queryIntentServices(bazaarIntent, 0).isNotEmpty()) {
-                            isBound = applicationContext.bindService(bazaarIntent, serviceConnection, Context.BIND_AUTO_CREATE)
-                            connectedStorePackage = BAZAAR_PACKAGE
+                        if (pm.queryIntentServices(myketIntent, 0).isNotEmpty()) {
+                            isBound = applicationContext.bindService(myketIntent, serviceConnection, Context.BIND_AUTO_CREATE)
+                            connectedStorePackage = MYKET_PACKAGE
                             Log.d(TAG, "Billing Connect Result: bindService initiated=$isBound")
                         } else {
-                            Log.e(TAG, "Billing Connect Result: false (Bazaar app not installed)")
+                            Log.e(TAG, "Billing Connect Result: false (Myket app not installed)")
                         }
                     } catch (t: Throwable) {
                         Log.e(TAG, "Billing Connect Result: false (error binding)", t)
@@ -163,9 +164,6 @@ object BillingManager {
         }
     }
 
-    /**
-     * استعلام قیمت (با ۳ تلاش)
-     */
     fun querySkuDetails(context: Context, onResult: (Boolean, String?) -> Unit = { _, _ -> }) {
         val appCtx = context.applicationContext
         if (mService == null) {
@@ -176,9 +174,6 @@ object BillingManager {
         querySkuDetailsInternal(appCtx, attempt = 1, maxAttempts = 3, onResult = onResult)
     }
 
-    /**
-     * متد عمومی برای تلاش مجدد از سمت UI
-     */
     fun retrySkuQuery(context: Context, onResult: (Boolean, String?) -> Unit = { _, _ -> }) {
         val appCtx = context.applicationContext
         if (mService == null) {
@@ -304,13 +299,13 @@ object BillingManager {
     fun getBillingErrorMessage(responseCode: Int): String {
         return when (responseCode) {
             1 -> "پرداخت توسط کاربر لغو شد."
-            2 -> "ارتباط با سرور کافهبازار برقرار نشد. لطفاً اتصال اینترنت خود را بررسی کنید."
-            3 -> "سیستم پرداخت کافهبازار در این نسخه پشتیبانی نمی‌شود."
-            4 -> "محصول مورد نظر (kiseh_pro_lifetime) در کافهبازار یافت نشد."
+            2 -> "ارتباط با سرور مایکت برقرار نشد. لطفاً اتصال اینترنت خود را بررسی کنید."
+            3 -> "سیستم پرداخت مایکت در این نسخه پشتیبانی نمی‌شود."
+            4 -> "محصول مورد نظر (kiseh_pro_lifetime) در مایکت یافت نشد."
             5 -> "خطای فنی در ارسال درخواست پرداخت."
-            6 -> "خطای سیستمی کافهبازار در هنگام انجام تراکنش."
+            6 -> "خطای سیستمی مایکت در هنگام انجام تراکنش."
             7 -> "این اشتراک قبلاً خریداری شده است."
-            else -> "خطا در برقراری ارتباط با کافهبازار (کد: $responseCode)"
+            else -> "خطا در برقراری ارتباط با مایکت (کد: $responseCode)"
         }
     }
 
@@ -320,7 +315,7 @@ object BillingManager {
 
         if (service == null) {
             init(context)
-            onResult(false, "ارتباط با کافهبازار برقرار نشد. لطفاً از نصب و فعال بودن کافهبازار اطمینان حاصل کنید.")
+            onResult(false, "ارتباط با مایکت برقرار نشد. لطفاً از نصب و فعال بودن مایکت اطمینان حاصل کنید.")
             return
         }
 
@@ -328,7 +323,7 @@ object BillingManager {
             try {
                 val purchasesBundle: Bundle? = service.getPurchases(3, appCtx.packageName, "inapp", null)
                 if (purchasesBundle == null) {
-                    withContext(Dispatchers.Main) { onResult(false, "پاسخی از کافهبازار دریافت نشد.") }
+                    withContext(Dispatchers.Main) { onResult(false, "پاسخی از مایکت دریافت نشد.") }
                     return@launch
                 }
 
@@ -354,8 +349,8 @@ object BillingManager {
                         val purchaseTime = json.optLong("purchaseTime", System.currentTimeMillis())
                         val signature = signatureList?.getOrNull(index)
 
-                        val isVerified = if (!signature.isNullOrBlank() && BAZAAR_PUBLIC_KEY.isNotBlank()) {
-                            verifyPurchase(purchaseJson, signature, BAZAAR_PUBLIC_KEY)
+                        val isVerified = if (!signature.isNullOrBlank() && MYKET_PUBLIC_KEY.isNotBlank()) {
+                            verifyPurchase(purchaseJson, signature, MYKET_PUBLIC_KEY)
                         } else true
 
                         if ((sku in ALL_VIP_SKUS) && state == 0 && isVerified) {
@@ -408,8 +403,8 @@ object BillingManager {
                             val sku = json.optString("productId")
                             val state = json.optInt("purchaseState", -1)
                             val signature = signatureList?.getOrNull(index)
-                            val isVerified = if (!signature.isNullOrBlank() && BAZAAR_PUBLIC_KEY.isNotBlank()) {
-                                verifyPurchase(purchaseJson, signature, BAZAAR_PUBLIC_KEY)
+                            val isVerified = if (!signature.isNullOrBlank() && MYKET_PUBLIC_KEY.isNotBlank()) {
+                                verifyPurchase(purchaseJson, signature, MYKET_PUBLIC_KEY)
                             } else true
 
                             if ((sku in ALL_VIP_SKUS) && state == 0 && isVerified) {
@@ -442,9 +437,9 @@ object BillingManager {
             val service = mService
 
             if (service == null) {
-                val errorMsg = "ارتباط با سرور کافهبازار برقرار نشد. لطفاً اتصال اینترنت خود را بررسی کنید."
+                val errorMsg = "ارتباط با سرور مایکت برقرار نشد. لطفاً اتصال اینترنت خود را بررسی کنید."
                 Toast.makeText(activity, errorMsg, Toast.LENGTH_LONG).show()
-                onFailure("Bazaar billing service not available")
+                onFailure("Myket billing service not available")
                 return
             }
 
@@ -452,7 +447,7 @@ object BillingManager {
             val buyIntentBundle = service.getBuyIntent(3, activity.packageName, SKU_PRO_LIFETIME, "inapp", developerPayload)
 
             if (buyIntentBundle == null) {
-                Toast.makeText(activity, "پاسخی از سرور کافهبازار دریافت نشد.", Toast.LENGTH_SHORT).show()
+                Toast.makeText(activity, "پاسخی از سرور مایکت دریافت نشد.", Toast.LENGTH_SHORT).show()
                 onFailure("buyIntentBundle is null")
                 return
             }
@@ -482,7 +477,7 @@ object BillingManager {
             }
         } catch (t: Throwable) {
             Log.e(TAG, "Error launching purchase", t)
-            Toast.makeText(activity, "امکان اتصال به درگاه کافهبازار میسر نشد: ${t.message}", Toast.LENGTH_SHORT).show()
+            Toast.makeText(activity, "امکان اتصال به درگاه مایکت میسر نشد: ${t.message}", Toast.LENGTH_SHORT).show()
             onFailure(t.message ?: "Error launching purchase")
         }
     }
@@ -552,7 +547,7 @@ object BillingManager {
             val prefs = context.getSharedPreferences(PREFS_NAME, Context.MODE_PRIVATE)
             val editor = prefs.edit().putBoolean(KEY_IS_PRO, isVip)
             if (isVip) {
-                editor.putString(KEY_PURCHASE_STORE, STORE_BAZAAR)
+                editor.putString(KEY_PURCHASE_STORE, STORE_MYKET)
                 purchaseToken?.let { editor.putString(KEY_PURCHASE_TOKEN, it) }
                 editor.putLong(KEY_PURCHASE_DATE, purchaseDate)
                 productId?.let { editor.putString(KEY_PRODUCT_ID, it) }
@@ -657,7 +652,7 @@ object BillingManager {
         }
     }
 
-    fun verifyPurchase(signedData: String, signature: String?, publicKeyString: String = BAZAAR_PUBLIC_KEY): Boolean {
+    fun verifyPurchase(signedData: String, signature: String?, publicKeyString: String = MYKET_PUBLIC_KEY): Boolean {
         if (publicKeyString.isBlank() || signature.isNullOrBlank()) return false
         return try {
             val decodedKey = android.util.Base64.decode(publicKeyString, android.util.Base64.DEFAULT)

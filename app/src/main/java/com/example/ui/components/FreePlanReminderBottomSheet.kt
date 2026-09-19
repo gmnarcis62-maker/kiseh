@@ -159,7 +159,7 @@ fun FreePlanReminderBottomSheet(
                     )
                     Spacer(modifier = Modifier.width(8.dp))
                     Text(
-                        text = "فعال‌سازی VIP از کافهبازار",
+                        text = "فعال‌سازی VIP از مایکت",
                         fontWeight = FontWeight.Bold,
                         color = Color.Black,
                         fontSize = 15.sp
