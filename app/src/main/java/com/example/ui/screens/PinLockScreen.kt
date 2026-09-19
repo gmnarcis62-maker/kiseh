@@ -1,6 +1,5 @@
 package com.example.ui.screens
 
-import android.widget.Toast
 import androidx.compose.animation.core.Animatable
 import androidx.compose.animation.core.keyframes
 import androidx.compose.foundation.background
@@ -13,27 +12,19 @@ import androidx.compose.foundation.layout.Column
 import androidx.compose.foundation.layout.Row
 import androidx.compose.foundation.layout.Spacer
 import androidx.compose.foundation.layout.fillMaxSize
-import androidx.compose.foundation.layout.fillMaxWidth
 import androidx.compose.foundation.layout.height
 import androidx.compose.foundation.layout.offset
 import androidx.compose.foundation.layout.padding
 import androidx.compose.foundation.layout.size
-import androidx.compose.foundation.layout.width
 import androidx.compose.foundation.shape.CircleShape
-import androidx.compose.foundation.shape.RoundedCornerShape
 import androidx.compose.material.icons.Icons
 import androidx.compose.material.icons.automirrored.filled.Backspace
-import androidx.compose.material.icons.filled.Fingerprint
 import androidx.compose.material.icons.filled.Lock
-import androidx.compose.material.icons.filled.Shield
 import androidx.compose.material3.ripple
 import androidx.compose.material3.Icon
-import androidx.compose.material3.MaterialTheme
-import androidx.compose.material3.Surface
 import androidx.compose.material3.Text
 import androidx.compose.runtime.Composable
 import androidx.compose.runtime.CompositionLocalProvider
-import androidx.compose.runtime.LaunchedEffect
 import androidx.compose.runtime.collectAsState
 import androidx.compose.runtime.getValue
 import androidx.compose.runtime.mutableStateOf
@@ -45,7 +36,6 @@ import androidx.compose.ui.Modifier
 import androidx.compose.ui.draw.clip
 import androidx.compose.ui.graphics.Brush
 import androidx.compose.ui.graphics.Color
-import androidx.compose.ui.platform.LocalContext
 import androidx.compose.ui.platform.LocalLayoutDirection
 import androidx.compose.ui.platform.testTag
 import androidx.compose.ui.text.font.FontWeight
@@ -54,8 +44,6 @@ import androidx.compose.ui.unit.IntOffset
 import androidx.compose.ui.unit.LayoutDirection
 import androidx.compose.ui.unit.dp
 import androidx.compose.ui.unit.sp
-import androidx.fragment.app.FragmentActivity
-import com.example.security.BiometricAuthManager
 import com.example.ui.theme.EmeraldDark
 import com.example.ui.theme.EmeraldPrimary
 import com.example.ui.theme.GoldAccent
@@ -68,10 +56,8 @@ fun PinLockScreen(
     viewModel: MainViewModel,
     onUnlocked: () -> Unit
 ) {
-    val context = LocalContext.current
     val coroutineScope = rememberCoroutineScope()
     val pinLength by viewModel.pinLength.collectAsState()
-    val isBiometricEnabled by viewModel.isBiometricEnabled.collectAsState()
 
     var enteredPin by remember { mutableStateOf("") }
     var errorMessage by remember { mutableStateOf<String?>(null) }
@@ -94,40 +80,6 @@ fun PinLockScreen(
                     0f at 400
                 }
             )
-        }
-    }
-
-    val isBiometricReady = remember(context) {
-        BiometricAuthManager.isBiometricReady(context)
-    }
-
-    fun launchBiometricPrompt() {
-        if (!isBiometricReady) return
-        val activity = context as? FragmentActivity
-        if (activity != null) {
-            BiometricAuthManager.showBiometricPrompt(
-                activity = activity,
-                title = "ورود به کیسه",
-                subtitle = "برای باز کردن برنامه اثر انگشت خود را اسکن کنید",
-                negativeButtonText = "استفاده از رمز عبور",
-                onSuccess = {
-                    viewModel.unlockApp()
-                    onUnlocked()
-                },
-                onError = { _, errStr ->
-                    // در صورت خطای لغو یا اثر انگشت اشتباه، ارور موقت ثبت می‌شود
-                    if (errStr.isNotBlank()) {
-                        errorMessage = errStr
-                    }
-                }
-            )
-        }
-    }
-
-    // باز کردن خودکار بیومتریک فقط در صورتی که فعال و دستگاه کاملاً آماده باشد
-    LaunchedEffect(isBiometricEnabled, isBiometricReady) {
-        if (isBiometricEnabled && isBiometricReady) {
-            launchBiometricPrompt()
         }
     }
 
@@ -250,7 +202,7 @@ fun PinLockScreen(
                         listOf("1", "2", "3"),
                         listOf("4", "5", "6"),
                         listOf("7", "8", "9"),
-                        listOf("biometric", "0", "backspace")
+                        listOf("empty", "0", "backspace")
                     )
 
                     for (row in rows) {
@@ -260,17 +212,8 @@ fun PinLockScreen(
                         ) {
                             for (key in row) {
                                 when (key) {
-                                    "biometric" -> {
-                                        if (isBiometricEnabled && isBiometricReady) {
-                                            KeypadActionButton(
-                                                icon = Icons.Default.Fingerprint,
-                                                contentDescription = "ورود با اثر انگشت",
-                                                tag = "biometric_keypad_button",
-                                                onClick = { launchBiometricPrompt() }
-                                            )
-                                        } else {
-                                            Spacer(modifier = Modifier.size(68.dp))
-                                        }
+                                    "empty" -> {
+                                        Spacer(modifier = Modifier.size(68.dp))
                                     }
                                     "backspace" -> {
                                         KeypadActionButton(

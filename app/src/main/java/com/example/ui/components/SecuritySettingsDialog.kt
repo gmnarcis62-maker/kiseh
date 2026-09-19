@@ -4,7 +4,6 @@ import android.widget.Toast
 import androidx.compose.animation.AnimatedVisibility
 import androidx.compose.foundation.background
 import androidx.compose.foundation.border
-import androidx.compose.foundation.clickable
 import androidx.compose.foundation.layout.Arrangement
 import androidx.compose.foundation.layout.Box
 import androidx.compose.foundation.layout.Column
@@ -21,9 +20,7 @@ import androidx.compose.foundation.shape.RoundedCornerShape
 import androidx.compose.foundation.text.KeyboardOptions
 import androidx.compose.foundation.verticalScroll
 import androidx.compose.material.icons.Icons
-import androidx.compose.material.icons.filled.Check
 import androidx.compose.material.icons.filled.Close
-import androidx.compose.material.icons.filled.Fingerprint
 import androidx.compose.material.icons.filled.Key
 import androidx.compose.material.icons.filled.Lock
 import androidx.compose.material.icons.filled.LockOpen
@@ -47,7 +44,6 @@ import androidx.compose.material3.IconButton
 import androidx.compose.material3.MaterialTheme
 import androidx.compose.material3.OutlinedButton
 import androidx.compose.material3.OutlinedTextField
-import androidx.compose.material3.OutlinedTextFieldDefaults
 import androidx.compose.material3.Surface
 import androidx.compose.material3.Switch
 import androidx.compose.material3.SwitchDefaults
@@ -72,13 +68,11 @@ import androidx.compose.ui.text.font.FontWeight
 import androidx.compose.ui.text.input.KeyboardType
 import androidx.compose.ui.text.input.PasswordVisualTransformation
 import androidx.compose.ui.text.input.VisualTransformation
-import androidx.compose.ui.text.style.TextAlign
 import androidx.compose.ui.unit.LayoutDirection
 import androidx.compose.ui.unit.dp
 import androidx.compose.ui.unit.sp
 import androidx.compose.ui.window.Dialog
 import androidx.compose.ui.window.DialogProperties
-import com.example.security.BiometricAuthManager
 import com.example.ui.theme.EmeraldDark
 import com.example.ui.theme.EmeraldPrimary
 import com.example.ui.theme.GoldAccent
@@ -94,12 +88,7 @@ fun SecuritySettingsDialog(
 
     val isAppLockEnabled by viewModel.isAppLockEnabled.collectAsState()
     val isLockOnLaunchEnabled by viewModel.isLockOnLaunchEnabled.collectAsState()
-    val isBiometricEnabled by viewModel.isBiometricEnabled.collectAsState()
     val pinLength by viewModel.pinLength.collectAsState()
-    val hasPinSet by viewModel.hasPinSet.collectAsState()
-
-    val biometricStatus = remember { viewModel.checkBiometricAvailability() }
-    val isBiometricSupported = biometricStatus == BiometricAuthManager.BiometricStatus.AVAILABLE
 
     // Sub-dialog states
     var showSetupPinDialog by remember { mutableStateOf(false) }
@@ -280,46 +269,6 @@ fun SecuritySettingsDialog(
                                 }
                             )
 
-                            Spacer(modifier = Modifier.height(12.dp))
-
-                            // Option 3: Biometric Fingerprint
-                            val biometricSubtitle = when (biometricStatus) {
-                                BiometricAuthManager.BiometricStatus.AVAILABLE ->
-                                    "ورود سریع و امن با اثر انگشت یا حسگر چهره"
-                                BiometricAuthManager.BiometricStatus.NONE_ENROLLED ->
-                                    "اثر انگشتی در تنظیمات دستگاه ثبت نشده است"
-                                BiometricAuthManager.BiometricStatus.NO_HARDWARE ->
-                                    "دستگاه شما فاقد حسگر اثر انگشت است"
-                                BiometricAuthManager.BiometricStatus.HW_UNAVAILABLE ->
-                                    "حسگر بیومتریک موقتاً در دسترس نیست"
-                                else -> "احراز هویت بیومتریک پشتیبانی نمی‌شود"
-                            }
-
-                            SecurityOptionRow(
-                                title = "ورود با اثر انگشت (بیومتریک)",
-                                subtitle = biometricSubtitle,
-                                icon = Icons.Default.Fingerprint,
-                                enabled = isBiometricSupported,
-                                trailingContent = {
-                                    Switch(
-                                        checked = isBiometricEnabled && isBiometricSupported,
-                                        enabled = isBiometricSupported,
-                                        onCheckedChange = { checked ->
-                                            if (isBiometricSupported) {
-                                                viewModel.setBiometricEnabled(checked)
-                                            } else {
-                                                Toast.makeText(context, biometricSubtitle, Toast.LENGTH_SHORT).show()
-                                            }
-                                        },
-                                        colors = SwitchDefaults.colors(
-                                            checkedThumbColor = Color.White,
-                                            checkedTrackColor = EmeraldPrimary
-                                        ),
-                                        modifier = Modifier.testTag("biometric_switch")
-                                    )
-                                }
-                            )
-
                             Spacer(modifier = Modifier.height(16.dp))
 
                             // Change PIN button
@@ -366,7 +315,6 @@ fun SecuritySettingsDialog(
         if (showSetupPinDialog) {
             SetupPinDialog(
                 viewModel = viewModel,
-                isBiometricSupported = isBiometricSupported,
                 onDismiss = { showSetupPinDialog = false },
                 onSuccess = {
                     showSetupPinDialog = false
@@ -467,14 +415,12 @@ fun SecurityOptionRow(
 @Composable
 fun SetupPinDialog(
     viewModel: MainViewModel,
-    isBiometricSupported: Boolean,
     onDismiss: () -> Unit,
     onSuccess: () -> Unit
 ) {
     var selectedLength by remember { mutableIntStateOf(4) }
     var pin by remember { mutableStateOf("") }
     var confirmPin by remember { mutableStateOf("") }
-    var enableBiometric by remember { mutableStateOf(isBiometricSupported) }
     var pinVisible by remember { mutableStateOf(false) }
     var errorMessage by remember { mutableStateOf<String?>(null) }
 
@@ -570,29 +516,6 @@ fun SetupPinDialog(
                     shape = RoundedCornerShape(12.dp)
                 )
 
-                if (isBiometricSupported) {
-                    Spacer(modifier = Modifier.height(12.dp))
-                    Row(
-                        modifier = Modifier.fillMaxWidth(),
-                        verticalAlignment = Alignment.CenterVertically,
-                        horizontalArrangement = Arrangement.SpaceBetween
-                    ) {
-                        Row(verticalAlignment = Alignment.CenterVertically) {
-                            Icon(Icons.Default.Fingerprint, contentDescription = null, tint = EmeraldPrimary, modifier = Modifier.size(20.dp))
-                            Spacer(modifier = Modifier.width(8.dp))
-                            Text("فعال‌سازی اثر انگشت", fontSize = 12.sp)
-                        }
-                        Switch(
-                            checked = enableBiometric,
-                            onCheckedChange = { enableBiometric = it },
-                            colors = SwitchDefaults.colors(
-                                checkedThumbColor = Color.White,
-                                checkedTrackColor = EmeraldPrimary
-                            )
-                        )
-                    }
-                }
-
                 if (errorMessage != null) {
                     Spacer(modifier = Modifier.height(8.dp))
                     Text(
@@ -617,7 +540,6 @@ fun SetupPinDialog(
                     }
                     viewModel.setupNewPin(
                         pin = pin,
-                        enableBiometric = enableBiometric && isBiometricSupported,
                         onSuccess = onSuccess,
                         onError = { errorMessage = it }
                     )

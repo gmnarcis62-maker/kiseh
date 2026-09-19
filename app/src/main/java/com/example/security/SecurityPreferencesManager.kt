@@ -19,21 +19,17 @@ import java.security.SecureRandom
 val Context.securityDataStore: DataStore<Preferences> by preferencesDataStore(name = "kiseh_security_prefs")
 
 /**
- * مدیریت امن ترجیحات امنیتی، رمز عبور هش‌شده و وضعیت بیومتریک با DataStore
+ * مدیریت امن ترجیحات امنیتی و رمز عبور هش‌شده با DataStore
  */
 class SecurityPreferencesManager(private val context: Context) {
 
     companion object {
         private val KEY_APP_LOCK_ENABLED = booleanPreferencesKey("key_app_lock_enabled")
         private val KEY_LOCK_ON_LAUNCH = booleanPreferencesKey("key_lock_on_launch")
-        private val KEY_BIOMETRIC_ENABLED = booleanPreferencesKey("key_biometric_enabled")
         private val KEY_PASSWORD_HASH = stringPreferencesKey("key_password_hash")
         private val KEY_PASSWORD_SALT = stringPreferencesKey("key_password_salt")
-        private val KEY_PIN_LENGTH = intPreferencesKey("key_pin_length") // 4 or 6
+        private val KEY_PIN_LENGTH = intPreferencesKey("key_pin_length")
 
-        /**
-         * ایجاد یک Salt امن تصادفی ۱۶ بایتی به صورت Hex
-         */
         fun generateSalt(): String {
             val random = SecureRandom()
             val saltBytes = ByteArray(16)
@@ -41,9 +37,6 @@ class SecurityPreferencesManager(private val context: Context) {
             return saltBytes.joinToString("") { "%02x".format(it) }
         }
 
-        /**
-         * محاسبه هش ایمن با الگوریتم SHA-256 همراه با نمک (Salt)
-         */
         fun hashPinWithSalt(pin: String, salt: String): String {
             val input = "$salt:$pin"
             val digest = MessageDigest.getInstance("SHA-256")
@@ -69,10 +62,6 @@ class SecurityPreferencesManager(private val context: Context) {
         prefs[KEY_LOCK_ON_LAUNCH] ?: true
     }
 
-    val isBiometricEnabled: Flow<Boolean> = safeData.map { prefs ->
-        prefs[KEY_BIOMETRIC_ENABLED] ?: false
-    }
-
     val pinLength: Flow<Int> = safeData.map { prefs ->
         prefs[KEY_PIN_LENGTH] ?: 4
     }
@@ -82,9 +71,6 @@ class SecurityPreferencesManager(private val context: Context) {
         !hash.isNullOrBlank()
     }
 
-    /**
-     * ذخیره یا تغییر پین با اعمال Salt تصادفی و SHA-256
-     */
     suspend fun savePin(pin: String) {
         val salt = generateSalt()
         val hash = hashPinWithSalt(pin, salt)
@@ -98,9 +84,6 @@ class SecurityPreferencesManager(private val context: Context) {
         }
     }
 
-    /**
-     * بررسی صحت پین وارد شده کاربر در برابر هش و نمک ذخیره شده
-     */
     suspend fun verifyPin(enteredPin: String): Boolean {
         var isValid = false
         context.securityDataStore.edit { prefs ->
@@ -126,19 +109,9 @@ class SecurityPreferencesManager(private val context: Context) {
         }
     }
 
-    suspend fun setBiometricEnabled(enabled: Boolean) {
-        context.securityDataStore.edit { prefs ->
-            prefs[KEY_BIOMETRIC_ENABLED] = enabled
-        }
-    }
-
-    /**
-     * حذف کامل رمز عبور و غیرفعال‌سازی قفل
-     */
     suspend fun clearSecurityData() {
         context.securityDataStore.edit { prefs ->
             prefs[KEY_APP_LOCK_ENABLED] = false
-            prefs[KEY_BIOMETRIC_ENABLED] = false
             prefs.remove(KEY_PASSWORD_HASH)
             prefs.remove(KEY_PASSWORD_SALT)
         }

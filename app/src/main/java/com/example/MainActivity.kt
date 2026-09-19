@@ -6,9 +6,9 @@ import android.content.Intent
 import android.content.pm.PackageManager
 import android.os.Build
 import android.os.Bundle
-import androidx.activity.ComponentActivity
 import androidx.activity.compose.setContent
 import androidx.activity.enableEdgeToEdge
+import androidx.activity.result.IntentSenderRequest
 import androidx.activity.result.contract.ActivityResultContracts
 import androidx.activity.viewModels
 import androidx.compose.foundation.layout.fillMaxSize
@@ -49,6 +49,24 @@ class MainActivity : FragmentActivity() {
         }
     }
 
+    // ⭐ Launcher خرید (روش جدید اندروید ۱۴)
+    private val purchaseLauncher = registerForActivityResult(
+        ActivityResultContracts.StartIntentSenderForResult()
+    ) { result ->
+        android.util.Log.d("BillingManager", "Purchase result: resultCode=${result.resultCode}")
+
+        val data = result.data
+        if (result.resultCode == RESULT_OK && data != null) {
+            handlePurchaseSuccess(data)
+        } else {
+            android.widget.Toast.makeText(this, "پرداخت لغو شد.", android.widget.Toast.LENGTH_SHORT).show()
+        }
+
+        try {
+            BillingManager.checkPurchases(this)
+        } catch (_: Throwable) {}
+    }
+
     private val permissionLauncher = registerForActivityResult(
         ActivityResultContracts.RequestMultiplePermissions()
     ) { _ ->
@@ -60,6 +78,9 @@ class MainActivity : FragmentActivity() {
     override fun onCreate(savedInstanceState: Bundle?) {
         super.onCreate(savedInstanceState)
         enableEdgeToEdge()
+
+        // ⭐ اتصال Launcher به BillingManager قبل از init
+        BillingManager.attachPurchaseLauncher(purchaseLauncher)
 
         try {
             BillingManager.init(this)
@@ -88,14 +109,9 @@ class MainActivity : FragmentActivity() {
                     val isAppLockEnabled by viewModel.isAppLockEnabled.collectAsState()
 
                     if (showSplash) {
-                        SplashScreen(
-                            onSplashFinished = { showSplash = false }
-                        )
+                        SplashScreen(onSplashFinished = { showSplash = false })
                     } else if (isAppLockEnabled && isAppCurrentlyLocked) {
-                        PinLockScreen(
-                            viewModel = viewModel,
-                            onUnlocked = { viewModel.unlockApp() }
-                        )
+                        PinLockScreen(viewModel = viewModel, onUnlocked = { viewModel.unlockApp() })
                     } else {
                         KisehDashboardScreen(viewModel = viewModel)
                     }
@@ -104,105 +120,65 @@ class MainActivity : FragmentActivity() {
         }
     }
 
-    override fun onResume() {
-        super.onResume()
-        try {
-            com.example.billing.BillingManager.checkPurchases(this)
-        } catch (_: Throwable) {}
-    }
+    /**
+     * ⭐ پردازش نتیجه خرید از Launcher
+     */
+    private fun handlePurchaseSuccess(data: Intent) {
+        val responseCode = data.getIntExtra("RESPONSE_CODE", 0)
+        val purchaseData = data.getStringExtra("INAPP_PURCHASE_DATA")
+        val dataSignature = data.getStringExtra("INAPP_DATA_SIGNATURE")
 
-    override fun onNewIntent(intent: android.content.Intent) {
-        super.onNewIntent(intent)
-        setIntent(intent)
-        try {
-            com.example.billing.BillingManager.checkPurchases(this)
-        } catch (_: Throwable) {}
-    }
+        android.util.Log.d("BillingManager", "responseCode=$responseCode, hasData=${!purchaseData.isNullOrEmpty()}")
 
-    @Suppress("DEPRECATION")
-    override fun onActivityResult(requestCode: Int, resultCode: Int, data: android.content.Intent?) {
-        super.onActivityResult(requestCode, resultCode, data)
-        if (requestCode == com.example.billing.BillingManager.PURCHASE_REQUEST_CODE || requestCode == 10001) {
-            android.util.Log.d("BillingManager", "Purchase Result: requestCode=$requestCode, resultCode=$resultCode")
+        if (responseCode == 0 && !purchaseData.isNullOrEmpty()) {
+            try {
+                val json = org.json.JSONObject(purchaseData)
+                val productId = json.optString("productId")
+                val purchaseState = json.optInt("purchaseState", -1)
+                val token = json.optString("purchaseToken")
+                val time = json.optLong("purchaseTime", System.currentTimeMillis())
 
-            if (resultCode == RESULT_OK && data != null) {
-                val responseCode = data.getIntExtra("RESPONSE_CODE", 0)
-                val purchaseData = data.getStringExtra("INAPP_PURCHASE_DATA")
-                val dataSignature = data.getStringExtra("INAPP_DATA_SIGNATURE")
-                android.util.Log.d("BillingManager", "Purchase Result: responseCode=$responseCode, hasPurchaseData=${!purchaseData.isNullOrEmpty()}, hasSignature=${!dataSignature.isNullOrEmpty()}")
+                val isVerified = if (!dataSignature.isNullOrBlank() && BillingManager.MYKET_PUBLIC_KEY.isNotBlank()) {
+                    BillingManager.verifyPurchase(purchaseData, dataSignature, BillingManager.MYKET_PUBLIC_KEY)
+                } else true
 
-                if ((responseCode == 0) && !purchaseData.isNullOrEmpty()) {
-                    try {
-                        val json = org.json.JSONObject(purchaseData)
-                        val productId = json.optString("productId")
-                        val purchaseState = json.optInt("purchaseState", -1)
-                        val token = json.optString("purchaseToken")
-                        val time = json.optLong("purchaseTime", System.currentTimeMillis())
-
-                        android.util.Log.d("BillingManager", "Purchase Token: $token")
-                        android.util.Log.d("BillingManager", "Purchase State: $purchaseState")
-                        android.util.Log.d("BillingManager", "Verify Started: productId=$productId, signature=$dataSignature")
-
-                        val isVerified = if (!dataSignature.isNullOrBlank() && com.example.billing.BillingManager.MYKET_PUBLIC_KEY.isNotBlank()) {
-                            com.example.billing.BillingManager.verifyPurchase(purchaseData, dataSignature, com.example.billing.BillingManager.MYKET_PUBLIC_KEY)
-                        } else {
-                            true
-                        }
-
-                        android.util.Log.d("BillingManager", "Verify Result: $isVerified")
-
-                        if (!isVerified) {
-                            android.widget.Toast.makeText(this, "اعتبارسنجی امضای دیجیتال خرید ناموفق بود. تراکنش نامعتبر است.", android.widget.Toast.LENGTH_LONG).show()
-                            return
-                        }
-
-                        if (productId !in com.example.billing.BillingManager.ALL_VIP_SKUS) {
-                            android.widget.Toast.makeText(this, "محصول خریداری شده ($productId) در لیست VIP برنامه یافت نشد.", android.widget.Toast.LENGTH_LONG).show()
-                            return
-                        }
-
-                        if (purchaseState == 0) {
-                            com.example.billing.BillingManager.setVipUser(this, true, token, time, productId)
-                            android.util.Log.d("BillingManager", "VIP Activated: token=$token, time=$time, product=$productId")
-                            android.widget.Toast.makeText(this, "🎉 خرید با موفقیت تایید شد! دسترسی دائم VIP فعال گردید.", android.widget.Toast.LENGTH_LONG).show()
-                            try {
-                                QuickVoiceNotificationHelper.showQuickVoiceNotification(this)
-                            } catch (_: Throwable) {}
-                            return
-                        } else {
-                            android.widget.Toast.makeText(this, "وضعیت خرید معتبر نیست (کد وضعیت: $purchaseState).", android.widget.Toast.LENGTH_SHORT).show()
-                            return
-                        }
-                    } catch (e: Throwable) {
-                        android.util.Log.e("BillingManager", "Error parsing onActivityResult purchaseData", e)
-                        android.widget.Toast.makeText(this, "خطا در پردازش اطلاعات خرید دریافتی از مایکت.", android.widget.Toast.LENGTH_SHORT).show()
-                        return
-                    }
-                } else if (responseCode == 7) {
-                    com.example.billing.BillingManager.setVipUser(this, true, null, System.currentTimeMillis(), com.example.billing.BillingManager.SKU_PRO_LIFETIME)
-                    android.util.Log.d("BillingManager", "VIP Activated (Item already owned)")
-                    android.widget.Toast.makeText(this, "🎉 این اشتراک قبلاً خریداری شده است و دسترسی VIP فعال گردید.", android.widget.Toast.LENGTH_LONG).show()
-                    try {
-                        QuickVoiceNotificationHelper.showQuickVoiceNotification(this)
-                    } catch (_: Throwable) {}
-                    return
-                } else if (responseCode != 0) {
-                    val errorMsg = com.example.billing.BillingManager.getBillingErrorMessage(responseCode)
-                    android.widget.Toast.makeText(this, errorMsg, android.widget.Toast.LENGTH_SHORT).show()
+                if (!isVerified) {
+                    android.widget.Toast.makeText(this, "اعتبارسنجی امضا ناموفق بود.", android.widget.Toast.LENGTH_LONG).show()
                     return
                 }
-            } else if (resultCode == RESULT_CANCELED) {
-                val responseCode = data?.getIntExtra("RESPONSE_CODE", 1) ?: 1
-                val errorMsg = com.example.billing.BillingManager.getBillingErrorMessage(responseCode)
-                android.widget.Toast.makeText(this, errorMsg, android.widget.Toast.LENGTH_SHORT).show()
-                return
-            }
 
-            com.example.billing.BillingManager.checkPurchases(this)
-            if (!com.example.billing.BillingManager.isProUser(this)) {
-                android.widget.Toast.makeText(this, "پرداخت توسط کاربر لغو شد.", android.widget.Toast.LENGTH_SHORT).show()
+                if (productId !in BillingManager.ALL_VIP_SKUS) {
+                    android.widget.Toast.makeText(this, "محصول یافت نشد.", android.widget.Toast.LENGTH_LONG).show()
+                    return
+                }
+
+                if (purchaseState == 0) {
+                    BillingManager.setVipUser(this, true, token, time, productId)
+                    android.widget.Toast.makeText(this, "🎉 خرید موفق! VIP فعال شد.", android.widget.Toast.LENGTH_LONG).show()
+                    try { QuickVoiceNotificationHelper.showQuickVoiceNotification(this) } catch (_: Throwable) {}
+                }
+            } catch (e: Throwable) {
+                android.util.Log.e("BillingManager", "Error parsing purchase", e)
+                android.widget.Toast.makeText(this, "خطا در پردازش خرید.", android.widget.Toast.LENGTH_SHORT).show()
             }
+        } else if (responseCode == 7) {
+            BillingManager.setVipUser(this, true, null, System.currentTimeMillis(), BillingManager.SKU_PRO_LIFETIME)
+            android.widget.Toast.makeText(this, "🎉 قبلاً خریداری شده بود.", android.widget.Toast.LENGTH_LONG).show()
+        } else if (responseCode != 0) {
+            val errorMsg = BillingManager.getBillingErrorMessage(responseCode)
+            android.widget.Toast.makeText(this, errorMsg, android.widget.Toast.LENGTH_SHORT).show()
         }
+    }
+
+    override fun onResume() {
+        super.onResume()
+        try { BillingManager.checkPurchases(this) } catch (_: Throwable) {}
+    }
+
+    override fun onNewIntent(intent: Intent) {
+        super.onNewIntent(intent)
+        setIntent(intent)
+        try { BillingManager.checkPurchases(this) } catch (_: Throwable) {}
     }
 
     override fun onDestroy() {
@@ -229,11 +205,7 @@ class MainActivity : FragmentActivity() {
                     }
                     startActivity(intent)
                 }
-            } catch (_: Throwable) {
-                try {
-                    startActivity(Intent(android.provider.Settings.ACTION_IGNORE_BATTERY_OPTIMIZATION_SETTINGS))
-                } catch (_: Throwable) {}
-            }
+            } catch (_: Throwable) {}
         }
     }
 
@@ -241,7 +213,6 @@ class MainActivity : FragmentActivity() {
         val permissionsToRequest = requiredPermissions.filter {
             ContextCompat.checkSelfPermission(this, it) != PackageManager.PERMISSION_GRANTED
         }
-
         if (permissionsToRequest.isNotEmpty()) {
             permissionLauncher.launch(permissionsToRequest.toTypedArray())
         }
@@ -249,12 +220,7 @@ class MainActivity : FragmentActivity() {
 
     fun hasNotificationPermission(): Boolean {
         return if (Build.VERSION.SDK_INT >= Build.VERSION_CODES.TIRAMISU) {
-            ContextCompat.checkSelfPermission(
-                this,
-                Manifest.permission.POST_NOTIFICATIONS
-            ) == PackageManager.PERMISSION_GRANTED
-        } else {
-            true
-        }
+            ContextCompat.checkSelfPermission(this, Manifest.permission.POST_NOTIFICATIONS) == PackageManager.PERMISSION_GRANTED
+        } else true
     }
 }

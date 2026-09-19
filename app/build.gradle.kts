@@ -17,8 +17,8 @@ android {
     applicationId = "red.line.kiseh"
     minSdk = 24
     targetSdk = 36
-    versionCode = 6
-    versionName = "1.5"
+    versionCode = 13
+    versionName = "2.2"
 
     testInstrumentationRunner = "androidx.test.runner.AndroidJUnitRunner"
   }
@@ -80,7 +80,8 @@ dependencies {
   implementation(libs.androidx.core.ktx)
   implementation("androidx.fragment:fragment-ktx:1.8.2")
   implementation(libs.androidx.datastore.preferences)
-  implementation(libs.androidx.biometric)
+  // ⭐ حذف شد چون مایکت دسترسی USE_BIOMETRIC را غیرضروری تشخیص داده
+  // implementation(libs.androidx.biometric)
   implementation(libs.androidx.lifecycle.runtime.compose)
   implementation(libs.androidx.lifecycle.runtime.ktx)
   implementation(libs.androidx.lifecycle.viewmodel.compose)

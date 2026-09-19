@@ -10,6 +10,8 @@ import android.os.Bundle
 import android.os.IBinder
 import android.util.Log
 import android.widget.Toast
+import androidx.activity.result.ActivityResultLauncher
+import androidx.activity.result.IntentSenderRequest
 import com.android.vending.billing.IInAppBillingService
 import kotlinx.coroutines.CoroutineScope
 import kotlinx.coroutines.Dispatchers
@@ -74,11 +76,15 @@ object BillingManager {
     private var appContext: Context? = null
     private var connectedStorePackage: String? = null
 
+    // ⭐ نگهداری Launcher برای خرید (روش جدید اندروید ۱۴)
+    @Volatile
+    private var purchaseLauncher: ActivityResultLauncher<IntentSenderRequest>? = null
+
     private val serviceConnection = object : ServiceConnection {
         override fun onServiceConnected(name: ComponentName?, service: IBinder?) {
             try {
                 mService = IInAppBillingService.Stub.asInterface(service)
-                Log.d(TAG, "Billing Connect Result: true (Connected to Myket: ${name?.packageName})")
+                Log.d(TAG, "Billing Connected: ${name?.packageName}")
                 appContext?.let { ctx ->
                     CoroutineScope(Dispatchers.IO).launch {
                         delay(800)
@@ -108,7 +114,6 @@ object BillingManager {
             val store = prefs.getString(KEY_PURCHASE_STORE, null)
             val isPro = prefs.getBoolean(KEY_IS_PRO, false)
 
-            // اگر از استور دیگری (مثل کافه‌بازار) خرید کرده باشد، پاکسازی شود
             if (isPro && (store == "bazaar" || (store != null && store != STORE_MYKET))) {
                 prefs.edit()
                     .putBoolean(KEY_IS_PRO, false)
@@ -148,12 +153,12 @@ object BillingManager {
                         if (pm.queryIntentServices(myketIntent, 0).isNotEmpty()) {
                             isBound = applicationContext.bindService(myketIntent, serviceConnection, Context.BIND_AUTO_CREATE)
                             connectedStorePackage = MYKET_PACKAGE
-                            Log.d(TAG, "Billing Connect Result: bindService initiated=$isBound")
+                            Log.d(TAG, "Billing bindService initiated=$isBound")
                         } else {
-                            Log.e(TAG, "Billing Connect Result: false (Myket app not installed)")
+                            Log.e(TAG, "Billing Connect: Myket app not installed")
                         }
                     } catch (t: Throwable) {
-                        Log.e(TAG, "Billing Connect Result: false (error binding)", t)
+                        Log.e(TAG, "Billing Connect error", t)
                     }
                 }
             } else if (mService != null) {
@@ -164,10 +169,17 @@ object BillingManager {
         }
     }
 
+    /**
+     * ⭐ تنظیم Launcher خرید - باید از MainActivity فراخوانی شود
+     */
+    fun attachPurchaseLauncher(launcher: ActivityResultLauncher<IntentSenderRequest>) {
+        purchaseLauncher = launcher
+        Log.d(TAG, "Purchase launcher attached")
+    }
+
     fun querySkuDetails(context: Context, onResult: (Boolean, String?) -> Unit = { _, _ -> }) {
         val appCtx = context.applicationContext
         if (mService == null) {
-            Log.w(TAG, "SKU Query: service null, returning cached")
             onResult(false, _skuPriceState.value)
             return
         }
@@ -177,7 +189,6 @@ object BillingManager {
     fun retrySkuQuery(context: Context, onResult: (Boolean, String?) -> Unit = { _, _ -> }) {
         val appCtx = context.applicationContext
         if (mService == null) {
-            Log.d(TAG, "Retry: service not bound, calling init")
             init(appCtx)
             CoroutineScope(Dispatchers.Main).launch {
                 delay(2000)
@@ -198,18 +209,16 @@ object BillingManager {
             try {
                 val service = mService
                 if (service == null) {
-                    Log.w(TAG, "SKU Query internal: service null")
                     withContext(Dispatchers.Main) { onResult(false, _skuPriceState.value) }
                     return@launch
                 }
 
-                Log.d(TAG, "SKU Query Start (attempt $attempt/$maxAttempts): sku=$SKU_PRO_LIFETIME")
+                Log.d(TAG, "SKU Query Start (attempt $attempt/$maxAttempts)")
                 val skuBundle = Bundle()
                 skuBundle.putStringArrayList("ITEM_ID_LIST", arrayListOf(SKU_PRO_LIFETIME))
 
                 val skuDetailsBundle = service.getSkuDetails(3, appCtx.packageName, "inapp", skuBundle)
                 if (skuDetailsBundle == null) {
-                    Log.e(TAG, "SKU Query: bundle null (attempt $attempt)")
                     if (attempt < maxAttempts) {
                         delay(2000L)
                         querySkuDetailsInternal(appCtx, attempt + 1, maxAttempts, onResult)
@@ -220,7 +229,7 @@ object BillingManager {
                 }
 
                 val responseCode = skuDetailsBundle.getInt("RESPONSE_CODE", -1)
-                Log.d(TAG, "SKU Query Result: responseCode=$responseCode (attempt $attempt)")
+                Log.d(TAG, "SKU Query responseCode=$responseCode")
 
                 if (responseCode == 0) {
                     val detailsList = skuDetailsBundle.getStringArrayList("DETAILS_LIST")
@@ -234,7 +243,7 @@ object BillingManager {
                                     val title = json.optString("title")
                                     val formattedPrice = formatPriceDisplay(rawPrice)
                                     _skuPriceState.value = formattedPrice
-                                    Log.d(TAG, "SKU SUCCESS: price=$formattedPrice, title=$title")
+                                    Log.d(TAG, "SKU SUCCESS: price=$formattedPrice")
                                     withContext(Dispatchers.Main) { onResult(true, formattedPrice) }
                                     return@launch
                                 }
@@ -242,9 +251,6 @@ object BillingManager {
                                 Log.e(TAG, "Error parsing SKU JSON", e)
                             }
                         }
-                        Log.w(TAG, "SKU: details list present but no match for $SKU_PRO_LIFETIME")
-                    } else {
-                        Log.w(TAG, "SKU: responseCode=0 but DETAILS_LIST empty")
                     }
                 }
 
@@ -255,7 +261,7 @@ object BillingManager {
                     withContext(Dispatchers.Main) { onResult(false, _skuPriceState.value) }
                 }
             } catch (t: Throwable) {
-                Log.e(TAG, "SKU Query error (attempt $attempt)", t)
+                Log.e(TAG, "SKU Query error", t)
                 if (attempt < maxAttempts) {
                     delay(2000L)
                     querySkuDetailsInternal(appCtx, attempt + 1, maxAttempts, onResult)
@@ -315,7 +321,7 @@ object BillingManager {
 
         if (service == null) {
             init(context)
-            onResult(false, "ارتباط با مایکت برقرار نشد. لطفاً از نصب و فعال بودن مایکت اطمینان حاصل کنید.")
+            onResult(false, "ارتباط با مایکت برقرار نشد.")
             return
         }
 
@@ -367,13 +373,12 @@ object BillingManager {
                 if (restored) {
                     setVipUserInternal(appCtx, true, restoredToken, restoredDate, restoredProduct)
                     withContext(Dispatchers.Main) {
-                        Toast.makeText(appCtx, "🎉 خرید VIP شما با موفقیت بازیابی شد.", Toast.LENGTH_LONG).show()
-                        onResult(true, "خرید شما با موفقیت بازیابی شد.")
+                        Toast.makeText(appCtx, "🎉 خرید VIP بازیابی شد.", Toast.LENGTH_LONG).show()
+                        onResult(true, "خرید بازیابی شد.")
                     }
                 } else {
                     withContext(Dispatchers.Main) {
-                        Toast.makeText(appCtx, "خریدی برای این حساب یافت نشد.", Toast.LENGTH_LONG).show()
-                        onResult(false, "خریدی برای این حساب یافت نشد.")
+                        onResult(false, "خریدی یافت نشد.")
                     }
                 }
             } catch (t: Throwable) {
@@ -431,15 +436,52 @@ object BillingManager {
         purchaseVip(activity, onSuccess, onFailure)
     }
 
+    /**
+     * ⭐ متد خرید اصلاح‌شده برای اندروید ۱۴ با ActivityResultLauncher
+     */
     fun purchaseVip(activity: Activity, onSuccess: () -> Unit = {}, onFailure: (String) -> Unit = {}) {
         try {
             init(activity)
-            val service = mService
 
-            if (service == null) {
-                val errorMsg = "ارتباط با سرور مایکت برقرار نشد. لطفاً اتصال اینترنت خود را بررسی کنید."
-                Toast.makeText(activity, errorMsg, Toast.LENGTH_LONG).show()
-                onFailure("Myket billing service not available")
+            val launcher = purchaseLauncher
+            if (launcher == null) {
+                Log.e(TAG, "Purchase launcher not attached!")
+                Toast.makeText(activity, "خطای داخلی: Launcher تنظیم نشده است", Toast.LENGTH_LONG).show()
+                onFailure("Launcher not attached")
+                return
+            }
+
+            if (mService == null) {
+                Log.d(TAG, "Service null, waiting and retrying...")
+                CoroutineScope(Dispatchers.Main).launch {
+                    delay(2000)
+                    if (mService == null) {
+                        Toast.makeText(activity, "ارتباط با مایکت برقرار نشد. دوباره تلاش کنید.", Toast.LENGTH_LONG).show()
+                        onFailure("Service not available")
+                    } else {
+                        executePurchase(activity, launcher, onSuccess, onFailure)
+                    }
+                }
+                return
+            }
+
+            executePurchase(activity, launcher, onSuccess, onFailure)
+        } catch (t: Throwable) {
+            Log.e(TAG, "Error launching purchase", t)
+            Toast.makeText(activity, "خطا: ${t.message}", Toast.LENGTH_SHORT).show()
+            onFailure(t.message ?: "Error")
+        }
+    }
+
+    private fun executePurchase(
+        activity: Activity,
+        launcher: ActivityResultLauncher<IntentSenderRequest>,
+        onSuccess: () -> Unit,
+        onFailure: (String) -> Unit
+    ) {
+        try {
+            val service = mService ?: run {
+                onFailure("Service is null")
                 return
             }
 
@@ -447,7 +489,6 @@ object BillingManager {
             val buyIntentBundle = service.getBuyIntent(3, activity.packageName, SKU_PRO_LIFETIME, "inapp", developerPayload)
 
             if (buyIntentBundle == null) {
-                Toast.makeText(activity, "پاسخی از سرور مایکت دریافت نشد.", Toast.LENGTH_SHORT).show()
                 onFailure("buyIntentBundle is null")
                 return
             }
@@ -458,17 +499,15 @@ object BillingManager {
                 @Suppress("DEPRECATION")
                 val pendingIntent = buyIntentBundle.getParcelable<PendingIntent>("BUY_INTENT")
                 if (pendingIntent != null) {
-                    activity.startIntentSenderForResult(
-                        pendingIntent.intentSender,
-                        PURCHASE_REQUEST_CODE,
-                        Intent(), 0, 0, 0
-                    )
+                    val request = IntentSenderRequest.Builder(pendingIntent.intentSender).build()
+                    launcher.launch(request)
+                    Log.d(TAG, "Purchase launched via ActivityResultLauncher")
                 } else {
                     onFailure("PendingIntent is null")
                 }
             } else if (responseCode == 7) {
                 setVipUserInternal(activity, true, null, System.currentTimeMillis(), SKU_PRO_LIFETIME)
-                Toast.makeText(activity, "🎉 شما قبلاً این اشتراک را خریداری کرده‌اید.", Toast.LENGTH_LONG).show()
+                Toast.makeText(activity, "🎉 قبلاً خریداری شده.", Toast.LENGTH_LONG).show()
                 onSuccess()
             } else {
                 val errorMsg = getBillingErrorMessage(responseCode)
@@ -476,9 +515,8 @@ object BillingManager {
                 onFailure(errorMsg)
             }
         } catch (t: Throwable) {
-            Log.e(TAG, "Error launching purchase", t)
-            Toast.makeText(activity, "امکان اتصال به درگاه مایکت میسر نشد: ${t.message}", Toast.LENGTH_SHORT).show()
-            onFailure(t.message ?: "Error launching purchase")
+            Log.e(TAG, "Error in executePurchase", t)
+            onFailure(t.message ?: "Error in executePurchase")
         }
     }
 
@@ -493,6 +531,7 @@ object BillingManager {
             mService = null
             connectedStorePackage = null
         }
+        purchaseLauncher = null
     }
 
     fun isQuickVoiceNotificationEnabled(context: Context): Boolean {

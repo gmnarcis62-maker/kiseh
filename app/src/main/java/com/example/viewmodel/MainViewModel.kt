@@ -60,7 +60,6 @@ import com.example.data.CategoryRepository
 import com.example.ui.components.CategoryHelper
 import com.example.ui.components.CategoryMeta
 import com.example.notification.RecurringTransactionWorker
-import com.example.security.BiometricAuthManager
 import com.example.security.SecurityPreferencesManager
 import com.example.sms.SmartCategoryMatcher
 import com.example.sms.UserCategoryLearner
@@ -92,7 +91,6 @@ class MainViewModel(application: Application) : AndroidViewModel(application) {
     // --- Security & App Lock State ---
     val isAppLockEnabled: StateFlow<Boolean>
     val isLockOnLaunchEnabled: StateFlow<Boolean>
-    val isBiometricEnabled: StateFlow<Boolean>
     val pinLength: StateFlow<Int>
     val hasPinSet: StateFlow<Boolean>
 
@@ -141,8 +139,6 @@ class MainViewModel(application: Application) : AndroidViewModel(application) {
             .stateIn(viewModelScope, SharingStarted.Eagerly, false)
         isLockOnLaunchEnabled = securityManager.isLockOnLaunchEnabled
             .stateIn(viewModelScope, SharingStarted.Eagerly, true)
-        isBiometricEnabled = securityManager.isBiometricEnabled
-            .stateIn(viewModelScope, SharingStarted.Eagerly, false)
         pinLength = securityManager.pinLength
             .stateIn(viewModelScope, SharingStarted.Eagerly, 4)
         hasPinSet = securityManager.hasPinSet
@@ -1180,7 +1176,7 @@ class MainViewModel(application: Application) : AndroidViewModel(application) {
     }
 
     // =========================================================================
-    // Security
+    // Security (PIN only)
     // =========================================================================
 
     fun unlockApp() { _isAppCurrentlyLocked.value = false }
@@ -1199,7 +1195,6 @@ class MainViewModel(application: Application) : AndroidViewModel(application) {
 
     fun setupNewPin(
         pin: String,
-        enableBiometric: Boolean = false,
         onSuccess: () -> Unit,
         onError: (String) -> Unit = {}
     ) {
@@ -1209,7 +1204,6 @@ class MainViewModel(application: Application) : AndroidViewModel(application) {
         }
         viewModelScope.launch {
             securityManager.savePin(pin)
-            if (enableBiometric) securityManager.setBiometricEnabled(true)
             _isAppCurrentlyLocked.value = false
             onSuccess()
         }
@@ -1253,15 +1247,7 @@ class MainViewModel(application: Application) : AndroidViewModel(application) {
         }
     }
 
-    fun setBiometricEnabled(enabled: Boolean) {
-        viewModelScope.launch { securityManager.setBiometricEnabled(enabled) }
-    }
-
     fun setLockOnLaunchEnabled(enabled: Boolean) {
         viewModelScope.launch { securityManager.setLockOnLaunchEnabled(enabled) }
-    }
-
-    fun checkBiometricAvailability(): BiometricAuthManager.BiometricStatus {
-        return BiometricAuthManager.checkBiometricAvailability(getApplication())
     }
 }
