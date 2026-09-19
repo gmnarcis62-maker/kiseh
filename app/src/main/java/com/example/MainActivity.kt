@@ -53,13 +53,40 @@ class MainActivity : FragmentActivity() {
     private val purchaseLauncher = registerForActivityResult(
         ActivityResultContracts.StartIntentSenderForResult()
     ) { result ->
-        android.util.Log.d("BillingManager", "Purchase result: resultCode=${result.resultCode}")
-
         val data = result.data
-        if (result.resultCode == RESULT_OK && data != null) {
-            handlePurchaseSuccess(data)
-        } else {
-            android.widget.Toast.makeText(this, "پرداخت لغو شد.", android.widget.Toast.LENGTH_SHORT).show()
+        val responseCode = data?.getIntExtra("RESPONSE_CODE", -1) ?: -1
+        val hasPurchaseData = !data?.getStringExtra("INAPP_PURCHASE_DATA").isNullOrEmpty()
+        android.util.Log.d(
+            "BillingManager",
+            "Purchase result: resultCode=${result.resultCode}, hasData=${data != null}, " +
+                "responseCode=$responseCode, hasPurchaseData=$hasPurchaseData"
+        )
+
+        when {
+            // خرید موفق: مایکت کد ۰ و اطلاعات خرید را برگردانده
+            data != null && responseCode == 0 && hasPurchaseData -> handlePurchaseSuccess(data)
+
+            // مایکت خودش کد مشخصی برگردانده (۷ = قبلاً خریداری شده، ۱ = لغو کاربر، ۴/۵/۶ = خطا ...)
+            // حتی اگر resultCode برابر RESULT_CANCELED باشد، پیام دقیق همان کد نمایش داده می‌شود
+            data != null && responseCode > 0 -> handlePurchaseSuccess(data)
+
+            // resultCode موفق است ولی داده‌ای نیامده: وضعیت واقعی خرید را از مایکت می‌پرسیم
+            result.resultCode == RESULT_OK -> {
+                BillingManager.restorePurchases(this) { ok, msg ->
+                    if (!ok) {
+                        android.widget.Toast.makeText(this, msg, android.widget.Toast.LENGTH_LONG).show()
+                    }
+                }
+            }
+
+            // فقط اینجا واقعاً «لغو» است (کد داخل پرانتز برای عیب‌یابی است و بعداً می‌تواند حذف شود)
+            else -> {
+                android.widget.Toast.makeText(
+                    this,
+                    "پرداخت لغو شد. (کد: ${result.resultCode}/$responseCode)",
+                    android.widget.Toast.LENGTH_LONG
+                ).show()
+            }
         }
 
         try {
